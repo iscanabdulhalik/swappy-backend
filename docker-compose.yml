@@ -1,0 +1,14 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: swappy_postgres
+    ports:
+      - '5433:5432'
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: iscan
+      POSTGRES_DB: swappy
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+volumes:
+  postgres_data:
