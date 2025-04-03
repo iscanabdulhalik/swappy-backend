@@ -91,6 +91,7 @@ model UserStats {
   messagesCount  Int       @default(0)
   followersCount Int       @default(0)
   followingCount Int       @default(0)
+  postsCount     Int       @default(0) // Post sayısını takip etmek için eklendi
   learningDays   Int       @default(0)
   lastActiveDate DateTime?
   createdAt      DateTime  @default(now())

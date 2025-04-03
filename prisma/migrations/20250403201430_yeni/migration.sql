@@ -56,6 +56,7 @@ CREATE TABLE "UserStats" (
     "messagesCount" INTEGER NOT NULL DEFAULT 0,
     "followersCount" INTEGER NOT NULL DEFAULT 0,
     "followingCount" INTEGER NOT NULL DEFAULT 0,
+    "postsCount" INTEGER NOT NULL DEFAULT 0,
     "learningDays" INTEGER NOT NULL DEFAULT 0,
     "lastActiveDate" TIMESTAMP(3),
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
