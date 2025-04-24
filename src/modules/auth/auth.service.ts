@@ -215,4 +215,68 @@ export class AuthService {
       where: { id },
     });
   }
+
+  async authenticateWithGoogle(idToken: string): Promise<User> {
+    try {
+      // Firebase ID token'ı doğrula
+      const decodedToken = await this.firebaseAdmin.verifyIdToken(idToken);
+
+      // Email doğrulaması yap
+      if (!decodedToken.email) {
+        throw new BadRequestException({
+          error: 'invalid_account',
+          message: "Google account doesn't have a valid email",
+        });
+      }
+
+      // Kullanıcı zaten var mı kontrol et (Firebase UID ile)
+      let user = await this.prisma.user.findUnique({
+        where: { firebaseUid: decodedToken.uid },
+      });
+
+      // Kullanıcı email ile de kontrol et (Firebase UID değişmiş olabilir)
+      if (!user && decodedToken.email) {
+        user = await this.prisma.user.findUnique({
+          where: { email: decodedToken.email },
+        });
+
+        // Eğer email ile bulunduysa, Firebase UID'yi güncelle
+        if (user) {
+          user = await this.prisma.user.update({
+            where: { id: user.id },
+            data: { firebaseUid: decodedToken.uid },
+          });
+        }
+      }
+
+      // Eğer kullanıcı yoksa yeni oluştur
+      if (!user) {
+        // Google hesabı bilgilerini al
+        const firebaseUser = await this.firebaseAdmin.getUser(decodedToken.uid);
+
+        user = await this.prisma.user.create({
+          data: {
+            email: firebaseUser?.email ?? '',
+            firebaseUid: firebaseUser.uid,
+            displayName: firebaseUser.displayName,
+            profileImageUrl: firebaseUser.photoURL,
+            settings: {
+              create: {},
+            },
+            stats: {
+              create: {},
+            },
+          },
+        });
+      }
+
+      return user;
+    } catch (error) {
+      throw new UnauthorizedException({
+        error: 'google_auth_failed',
+        message: 'Google authentication failed',
+        details: { originalError: error.message },
+      });
+    }
+  }
 }

@@ -9,7 +9,12 @@ import {
   HttpStatus,
 } from '@nestjs/common';
 import { AuthService } from './auth.service';
-import { RegisterDto, LoginDto, FirebaseAuthDto } from './dto/auth.dto';
+import {
+  RegisterDto,
+  LoginDto,
+  FirebaseAuthDto,
+  GoogleAuthDto,
+} from './dto/auth.dto';
 import { User } from '@prisma/client';
 import { FirebaseAuthGuard } from '../../common/guards/firebase-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
@@ -57,5 +62,12 @@ export class AuthController {
   @HttpCode(HttpStatus.NO_CONTENT)
   async deleteAccount(@CurrentUser('id') userId: string): Promise<void> {
     return this.authService.deleteUser(userId);
+  }
+
+  @Post('google')
+  async authenticateWithGoogle(
+    @Body() googleAuthDto: GoogleAuthDto,
+  ): Promise<User> {
+    return this.authService.authenticateWithGoogle(googleAuthDto.idToken);
   }
 }

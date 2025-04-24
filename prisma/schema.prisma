@@ -19,6 +19,7 @@ model User {
   id                String             @id @default(uuid())
   firebaseUid       String             @unique
   email             String             @unique
+  password          String?
   displayName       String?
   firstName         String?
   lastName          String?

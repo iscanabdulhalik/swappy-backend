@@ -49,6 +49,12 @@ export class FirebaseAuthDto {
   idToken: string;
 }
 
+export class GoogleAuthDto {
+  @IsString()
+  @IsNotEmpty()
+  idToken: string;
+}
+
 export class RefreshTokenDto {
   @IsString()
   @IsNotEmpty()
