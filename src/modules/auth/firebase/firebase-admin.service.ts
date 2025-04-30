@@ -116,4 +116,27 @@ export class FirebaseAdminService implements OnModuleInit {
       throw new Error(`Firebase token exchange failed: ${errorMessage}`);
     }
   }
+
+  // firebase-admin.service.ts - Eksik metodları ekleyelim
+  async generatePasswordResetLink(email: string): Promise<string> {
+    try {
+      // Firebase Auth REST API ile şifre sıfırlama bağlantısı oluştur
+      return this.getAuth().generatePasswordResetLink(email);
+    } catch (error) {
+      throw new Error(
+        `Failed to generate password reset link: ${error.message}`,
+      );
+    }
+  }
+
+  async generateEmailVerificationLink(email: string): Promise<string> {
+    try {
+      // Firebase Auth REST API ile e-posta doğrulama bağlantısı oluştur
+      return this.getAuth().generateEmailVerificationLink(email);
+    } catch (error) {
+      throw new Error(
+        `Failed to generate email verification link: ${error.message}`,
+      );
+    }
+  }
 }
