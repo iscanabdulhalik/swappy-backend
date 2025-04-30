@@ -7,6 +7,7 @@ import {
   Get,
   HttpCode,
   HttpStatus,
+  Put,
 } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import {
@@ -14,6 +15,9 @@ import {
   LoginDto,
   FirebaseAuthDto,
   GoogleAuthDto,
+  ChangePasswordDto,
+  ResetPasswordDto,
+  UpdateProfileDto,
 } from './dto/auth.dto';
 import { User } from '@prisma/client';
 import { FirebaseAuthGuard } from '../../common/guards/firebase-auth.guard';
@@ -69,5 +73,49 @@ export class AuthController {
     @Body() googleAuthDto: GoogleAuthDto,
   ): Promise<User> {
     return this.authService.authenticateWithGoogle(googleAuthDto.idToken);
+  }
+
+  // auth.controller.ts - Yeni endpoint'leri ekleyelim
+  @Put('me/profile')
+  @UseGuards(FirebaseAuthGuard)
+  async updateProfile(
+    @CurrentUser('id') userId: string,
+    @Body() updateProfileDto: UpdateProfileDto,
+  ): Promise<User> {
+    return this.authService.updateProfile(userId, updateProfileDto);
+  }
+
+  @Post('reset-password')
+  async resetPassword(
+    @Body() resetPasswordDto: ResetPasswordDto,
+  ): Promise<{ message: string }> {
+    await this.authService.resetPassword(resetPasswordDto);
+    return {
+      message:
+        'If your email is registered, you will receive a password reset link',
+    };
+  }
+
+  @Post('verify-email')
+  @UseGuards(FirebaseAuthGuard)
+  async sendEmailVerification(
+    @CurrentUser('id') userId: string,
+  ): Promise<{ message: string }> {
+    await this.authService.sendEmailVerification(userId);
+    return { message: 'Email verification link sent' };
+  }
+
+  @Post('change-password')
+  @UseGuards(FirebaseAuthGuard)
+  async changePassword(
+    @CurrentUser('id') userId: string,
+    @Body() changePasswordDto: ChangePasswordDto,
+  ): Promise<{ message: string }> {
+    await this.authService.changePassword(
+      userId,
+      changePasswordDto.oldPassword,
+      changePasswordDto.newPassword,
+    );
+    return { message: 'Password changed successfully' };
   }
 }
