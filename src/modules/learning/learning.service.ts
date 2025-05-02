@@ -11,64 +11,108 @@ import {
   DictionaryRequestDto,
   SaveWordDto,
 } from './dto/learning.dto';
+import { GoogleGenerativeAI } from '@google/generative-ai';
+import * as firebase from 'firebase/app';
+import 'firebase/auth';
 
 @Injectable()
 export class LearningService {
-  constructor(private readonly prisma: PrismaService) {}
+  private readonly genAI: GoogleGenerativeAI;
+
+  constructor(private readonly prisma: PrismaService) {
+    if (!process.env.GEMINI_API_KEY) {
+      throw new Error('GEMINI_API_KEY is not defined in environment variables');
+    }
+    this.genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+  }
 
   /**
-   * Translate text
+   * Translate text using Gemini AI
    */
   async translateText(userId: string, dto: TranslationRequestDto) {
     // Check if languages exist
     await this.validateLanguages([dto.sourceLanguage, dto.targetLanguage]);
 
-    // TODO: Implement actual translation service
-    // For development, return a mock translation
+    const model = this.genAI.getGenerativeModel({ model: 'gemini-pro' });
+
+    const prompt = `Translate the following text from ${dto.sourceLanguage} to ${dto.targetLanguage}. 
+    Provide only the translation without any additional explanations or notes.
+    Text to translate: "${dto.text}"`;
+
+    const result = await model.generateContent(prompt);
+    const response = result.response;
+    const translatedText = response.text();
+
     return {
       originalText: dto.text,
-      translatedText: `[Translated: ${dto.text}]`,
+      translatedText: translatedText.trim(),
       sourceLanguage: dto.sourceLanguage,
       targetLanguage: dto.targetLanguage,
     };
   }
 
   /**
-   * Correct text
+   * Correct text using Gemini AI
    */
   async correctText(userId: string, dto: CorrectionRequestDto) {
     // Check if language exists
     await this.validateLanguages([dto.languageCode]);
 
-    // TODO: Implement actual correction service
-    // For development, return a mock correction
+    const model = this.genAI.getGenerativeModel({ model: 'gemini-pro' });
+
+    const prompt = `Please correct the following text in ${dto.languageCode}. 
+    Focus on ${dto.type || 'grammar'} corrections.
+    Provide the corrected text and explain each correction made.
+    Text to correct: "${dto.text}"
+    
+    Format the response as JSON with the following structure:
+    {
+      "correctedText": "the corrected text",
+      "corrections": [
+        {
+          "type": "grammar/spelling/punctuation",
+          "start": number,
+          "end": number,
+          "suggestion": "the correction",
+          "explanation": "explanation of the correction"
+        }
+      ]
+    }`;
+
+    const result = await model.generateContent(prompt);
+    const response = result.response;
+    const corrections = JSON.parse(response.text());
+
     return {
       originalText: dto.text,
-      correctedText: dto.text.replace(/\b(a|the|an)\b/gi, 'THE'),
-      corrections: [
-        {
-          type: dto.type || 'grammar',
-          start: 0,
-          end: 5,
-          suggestion: 'Corrected text',
-          explanation: 'This is a mock correction explanation',
-        },
-      ],
+      ...corrections,
     };
   }
 
   /**
-   * Get suggestions based on context
+   * Get suggestions based on context using Gemini AI
    */
   async getSuggestions(userId: string, context: string, languageCode: string) {
     // Check if language exists
     await this.validateLanguages([languageCode]);
 
-    // TODO: Implement actual suggestions service
-    // For development, return mock suggestions
+    const model = this.genAI.getGenerativeModel({ model: 'gemini-pro' });
+
+    const prompt = `Given the following context in ${languageCode}, provide 3 natural and contextually appropriate suggestions for how to continue or respond.
+    Context: "${context}"
+    
+    Format the response as JSON with the following structure:
+    {
+      "suggestions": ["suggestion1", "suggestion2", "suggestion3"]
+    }`;
+
+    const result = await model.generateContent(prompt);
+    const response = result.response;
+    const suggestions = JSON.parse(response.text());
+
     return {
       context,
-      suggestions: ['Suggestion 1', 'Suggestion 2', 'Suggestion 3'],
+      ...suggestions,
     };
   }
 
@@ -103,35 +147,37 @@ export class LearningService {
   }
 
   /**
-   * Search dictionary
+   * Search dictionary using Gemini AI
    */
   async searchDictionary(userId: string, dto: DictionaryRequestDto) {
     // Check if language exists
     await this.validateLanguages([dto.languageCode]);
 
-    // TODO: Implement actual dictionary service
-    // For development, return mock dictionary result
-    return {
-      word: dto.word,
-      phonetic: '/ɪɡˈzæmpəl/',
-      definitions: [
+    const model = this.genAI.getGenerativeModel({ model: 'gemini-pro' });
+
+    const prompt = `Provide a detailed dictionary entry for the word "${dto.word}" in ${dto.languageCode}.
+    Include phonetic transcription, multiple definitions with parts of speech, example sentences, synonyms, and antonyms.
+    
+    Format the response as JSON with the following structure:
+    {
+      "word": "the word",
+      "phonetic": "phonetic transcription",
+      "definitions": [
         {
-          partOfSpeech: 'noun',
-          meaning:
-            'a thing characteristic of its kind or illustrating a general rule',
-          example:
-            'its a good example of how different the various parts of the country are',
-        },
-        {
-          partOfSpeech: 'verb',
-          meaning: 'be illustrated or exemplified',
-          example:
-            'the extent of Allied naval power is exampled by the fact that...',
-        },
+          "partOfSpeech": "noun/verb/etc",
+          "meaning": "definition",
+          "example": "example sentence"
+        }
       ],
-      synonyms: ['instance', 'case', 'illustration'],
-      antonyms: [],
-    };
+      "synonyms": ["synonym1", "synonym2"],
+      "antonyms": ["antonym1", "antonym2"]
+    }`;
+
+    const result = await model.generateContent(prompt);
+    const response = result.response;
+    const dictionaryEntry = JSON.parse(response.text());
+
+    return dictionaryEntry;
   }
 
   /**
@@ -368,7 +414,7 @@ export class LearningService {
       if (!language) {
         throw new NotFoundException({
           error: 'language_not_found',
-          message: `Language with code "${code}" not found`,
+          message: `Language with code ${code} not found`,
         });
       }
     }

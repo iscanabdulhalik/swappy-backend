@@ -22,7 +22,7 @@ import {
   SaveWordDto,
 } from './dto/learning.dto';
 
-@Controller()
+@Controller('learning')
 @UseGuards(FirebaseAuthGuard)
 export class LearningController {
   constructor(private readonly learningService: LearningService) {}
