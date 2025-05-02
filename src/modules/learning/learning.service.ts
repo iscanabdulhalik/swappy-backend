@@ -12,6 +12,8 @@ import {
   SaveWordDto,
 } from './dto/learning.dto';
 import { GoogleGenerativeAI } from '@google/generative-ai';
+import * as firebase from 'firebase/app';
+import 'firebase/auth';
 
 @Injectable()
 export class LearningService {
@@ -412,7 +414,7 @@ export class LearningService {
       if (!language) {
         throw new NotFoundException({
           error: 'language_not_found',
-          message: `Language with code "${code}" not found`,
+          message: `Language with code ${code} not found`,
         });
       }
     }
