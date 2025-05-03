@@ -33,7 +33,7 @@ export class LearningService {
     // Check if languages exist
     await this.validateLanguages([dto.sourceLanguage, dto.targetLanguage]);
 
-    const model = this.genAI.getGenerativeModel({ model: 'gemini-pro' });
+    const model = this.genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
 
     const prompt = `Translate the following text from ${dto.sourceLanguage} to ${dto.targetLanguage}. 
     Provide only the translation without any additional explanations or notes.

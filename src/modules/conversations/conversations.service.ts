@@ -12,6 +12,8 @@ import {
   MessageCorrection,
   UserConversation,
 } from '@prisma/client';
+import { CACHE_MANAGER } from '@nestjs/cache-manager';
+import { Cache } from 'cache-manager';
 import {
   CreateMessageDto,
   CreateMediaMessageDto,
@@ -24,7 +26,6 @@ import {
   TranslationRequestDto,
 } from './dto/conversation.dto';
 
-// Define a custom type for the conversation with participants
 type ConversationWithParticipants = Conversation & {
   language: {
     id: string;
