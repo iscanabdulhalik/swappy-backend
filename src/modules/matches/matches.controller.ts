@@ -15,7 +15,11 @@ import {
 import { MatchesService } from './matches.service';
 import { FirebaseAuthGuard } from '../../common/guards/firebase-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
-import { MatchRequestDto, MatchCriteriaDto } from './dto/match.dto';
+import {
+  MatchRequestDto,
+  MatchCriteriaDto,
+  ScoringWeightsDto,
+} from './dto/match.dto';
 import { Match, MatchRequest } from '@prisma/client';
 
 @Controller('matches')
@@ -35,6 +39,23 @@ export class MatchesController {
       criteria,
       limit,
       offset,
+    );
+  }
+
+  @Get('recommendations/scored')
+  async getScoredMatchRecommendations(
+    @CurrentUser('id') userId: string,
+    @Query() criteria: MatchCriteriaDto,
+    @Query('limit') limit = 20,
+    @Query('offset') offset = 0,
+    @Body() weights?: ScoringWeightsDto,
+  ) {
+    return this.matchesService.getMatchRecommendationsWithScoring(
+      userId,
+      criteria,
+      limit,
+      offset,
+      weights,
     );
   }
 

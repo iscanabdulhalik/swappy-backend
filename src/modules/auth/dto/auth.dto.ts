@@ -31,6 +31,10 @@ export class RegisterDto {
   @IsString()
   @IsOptional()
   countryCode?: string;
+
+  @IsString()
+  @IsNotEmpty()
+  role: string;
 }
 
 export class LoginDto {

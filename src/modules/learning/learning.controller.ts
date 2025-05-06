@@ -21,6 +21,8 @@ import {
   DictionaryRequestDto,
   SaveWordDto,
 } from './dto/learning.dto';
+import { Roles } from 'src/common/decorators/roles.decorator';
+import { Role } from 'src/common/enums/role.enum';
 
 @Controller('learning')
 @UseGuards(FirebaseAuthGuard)
@@ -28,6 +30,7 @@ export class LearningController {
   constructor(private readonly learningService: LearningService) {}
 
   @Post('translate')
+  @Roles(Role.ADMIN)
   async translateText(
     @CurrentUser('id') userId: string,
     @Body() translationDto: TranslationRequestDto,

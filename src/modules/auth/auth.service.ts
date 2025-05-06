@@ -52,6 +52,7 @@ export class AuthService {
         data: {
           email: registerDto.email,
           firebaseUid: firebaseUser.uid,
+          role: registerDto.role || 'user',
           displayName: registerDto.displayName,
           firstName: registerDto.firstName,
           lastName: registerDto.lastName,

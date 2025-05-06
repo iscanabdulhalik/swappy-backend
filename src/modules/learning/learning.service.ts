@@ -58,7 +58,7 @@ export class LearningService {
     // Check if language exists
     await this.validateLanguages([dto.languageCode]);
 
-    const model = this.genAI.getGenerativeModel({ model: 'gemini-pro' });
+    const model = this.genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
 
     const prompt = `Please correct the following text in ${dto.languageCode}. 
     Focus on ${dto.type || 'grammar'} corrections.
@@ -96,7 +96,7 @@ export class LearningService {
     // Check if language exists
     await this.validateLanguages([languageCode]);
 
-    const model = this.genAI.getGenerativeModel({ model: 'gemini-pro' });
+    const model = this.genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
 
     const prompt = `Given the following context in ${languageCode}, provide 3 natural and contextually appropriate suggestions for how to continue or respond.
     Context: "${context}"
@@ -153,7 +153,7 @@ export class LearningService {
     // Check if language exists
     await this.validateLanguages([dto.languageCode]);
 
-    const model = this.genAI.getGenerativeModel({ model: 'gemini-pro' });
+    const model = this.genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
 
     const prompt = `Provide a detailed dictionary entry for the word "${dto.word}" in ${dto.languageCode}.
     Include phonetic transcription, multiple definitions with parts of speech, example sentences, synonyms, and antonyms.
