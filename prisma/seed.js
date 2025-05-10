@@ -1,5 +1,6 @@
 // prisma/seed.js
 const { PrismaClient } = require('@prisma/client');
+require('dotenv').config();
 const prisma = new PrismaClient();
 
 async function main() {
@@ -294,24 +295,6 @@ async function main() {
   console.log(`${createdLanguages.length} dil başarıyla eklendi.`);
 
   // Test kullanıcısı (isteğe bağlı)
-  const testUser = await prisma.user.upsert({
-    where: { email: 'test@example.com' },
-    update: {},
-    create: {
-      email: 'test@example.com',
-      firebaseUid: 'test-uid-123456',
-      displayName: 'Test User',
-      isActive: true,
-      settings: {
-        create: {},
-      },
-      stats: {
-        create: {},
-      },
-    },
-  });
-
-  console.log(`Test kullanıcısı oluşturuldu: ${testUser.id}`);
 }
 
 main()

@@ -1,5 +1,3 @@
-// prisma/schema.prisma
-
 generator client {
   provider = "prisma-client-js"
 }
@@ -9,52 +7,44 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-enum LanguageLevel {
-  BEGINNER
-  INTERMEDIATE
-  ADVANCED
-}
-
 model User {
-  id                String             @id @default(uuid())
-  firebaseUid       String             @unique
-  email             String             @unique
-  role              String?             @default("user") // user, admin
-  hobbies           String[]
-  birthDate         DateTime?
-  password          String?
-  displayName       String?
-  firstName         String?
-  lastName          String?
-  bio               String?
-  profileImageUrl   String?
-  countryCode       String?
-  createdAt         DateTime           @default(now())
-  updatedAt         DateTime           @updatedAt
-  isActive          Boolean            @default(true)
-  settings          UserSettings?
-  languages         UserLanguage[]     @relation("UserLanguages")
-  followers         Follow[]           @relation("UserFollowers")
-  following         Follow[]           @relation("UserFollowing")
-  matchesInitiated  Match[]            @relation("MatchInitiator")
-  matchesReceived   Match[]            @relation("MatchReceiver")
-  sentRequests      MatchRequest[]     @relation("RequestSender")
-  receivedRequests  MatchRequest[]     @relation("RequestReceiver")
-  sentMessages      Message[]          @relation("MessageSender")
-  conversations     UserConversation[]
-  stats             UserStats?
-
-  MessageCorrection MessageCorrection[]
-  Post              Post[]
-  PostLike          PostLike[]
-  Comment           Comment[]
-  CommentLike       CommentLike[]
-  Story             Story[]
-  StoryView         StoryView[]
-  SavedWord         SavedWord[]
-
-  receivedNotifications  Notification[] @relation(name: "UserNotifications")
-  sentActorNotifications Notification[] @relation("NotificationActor")
+  id                     String              @id @default(uuid())
+  firebaseUid            String              @unique
+  email                  String              @unique
+  role                   String?             @default("user")
+  hobbies                String[]
+  birthDate              DateTime?
+  password               String?
+  displayName            String?
+  firstName              String?
+  lastName               String?
+  bio                    String?
+  profileImageUrl        String?
+  countryCode            String?
+  createdAt              DateTime            @default(now())
+  updatedAt              DateTime            @updatedAt
+  isActive               Boolean             @default(true)
+  Comment                Comment[]
+  CommentLike            CommentLike[]
+  followers              Follow[]            @relation("UserFollowers")
+  following              Follow[]            @relation("UserFollowing")
+  matchesInitiated       Match[]             @relation("MatchInitiator")
+  matchesReceived        Match[]             @relation("MatchReceiver")
+  receivedRequests       MatchRequest[]      @relation("RequestReceiver")
+  sentRequests           MatchRequest[]      @relation("RequestSender")
+  sentMessages           Message[]           @relation("MessageSender")
+  MessageCorrection      MessageCorrection[]
+  sentActorNotifications Notification[]      @relation("NotificationActor")
+  receivedNotifications  Notification[]      @relation("UserNotifications")
+  Post                   Post[]
+  PostLike               PostLike[]
+  SavedWord              SavedWord[]
+  Story                  Story[]
+  StoryView              StoryView[]
+  conversations          UserConversation[]
+  languages              UserLanguage[]      @relation("UserLanguages")
+  settings               UserSettings?
+  stats                  UserStats?
 }
 
 model UserLanguage {
@@ -64,12 +54,10 @@ model UserLanguage {
   level      LanguageLevel
   isNative   Boolean       @default(false)
   isLearning Boolean       @default(false)
-  
-  user       User          @relation("UserLanguages", fields: [userId], references: [id], onDelete: Cascade)
-  language   Language      @relation(fields: [languageId], references: [id], onDelete: Cascade)
-  
   createdAt  DateTime      @default(now())
   updatedAt  DateTime      @updatedAt
+  language   Language      @relation(fields: [languageId], references: [id], onDelete: Cascade)
+  user       User          @relation("UserLanguages", fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, languageId])
 }
@@ -77,55 +65,51 @@ model UserLanguage {
 model UserSettings {
   id                 String   @id @default(uuid())
   userId             String   @unique
-  user               User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   emailNotifications Boolean  @default(true)
   pushNotifications  Boolean  @default(true)
   privateProfile     Boolean  @default(false)
-  theme              String? // light, dark
-  language           String   @default("en") // UI language preference
+  theme              String?
+  language           String   @default("en")
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
+  user               User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 model UserStats {
   id             String    @id @default(uuid())
   userId         String    @unique
-  user           User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   matchesCount   Int       @default(0)
   messagesCount  Int       @default(0)
   followersCount Int       @default(0)
   followingCount Int       @default(0)
-  postsCount     Int       @default(0) // Post sayısını takip etmek için eklendi
+  postsCount     Int       @default(0)
   learningDays   Int       @default(0)
   lastActiveDate DateTime?
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
+  user           User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 model Language {
   id            String         @id @default(uuid())
-  code          String         @unique // ISO 639-1 code (en, es, tr, etc.)
+  code          String         @unique
   name          String
-  nativeName    String // Name in the language itself
-  flagEmoji     String? // Flag emoji for the language
-  userLanguages UserLanguage[]
+  nativeName    String
+  flagEmoji     String?
   conversations Conversation[]
-
-  Post Post[]
-
-  Story Story[]
-
-  SavedWord SavedWord[]
+  Post          Post[]
+  SavedWord     SavedWord[]
+  Story         Story[]
+  userLanguages UserLanguage[]
 }
-
 
 model Follow {
   id          String   @id @default(uuid())
   followerId  String
   followingId String
+  createdAt   DateTime @default(now())
   follower    User     @relation("UserFollowers", fields: [followerId], references: [id], onDelete: Cascade)
   following   User     @relation("UserFollowing", fields: [followingId], references: [id], onDelete: Cascade)
-  createdAt   DateTime @default(now())
 
   @@unique([followerId, followingId])
 }
@@ -136,24 +120,24 @@ model Match {
   receiverId     String
   conversationId String?       @unique
   isFavorite     Boolean       @default(false)
-  status         String        @default("active") // active, ended
-  initiator      User          @relation("MatchInitiator", fields: [initiatorId], references: [id], onDelete: Cascade)
-  receiver       User          @relation("MatchReceiver", fields: [receiverId], references: [id], onDelete: Cascade)
-  conversation   Conversation? @relation(fields: [conversationId], references: [id])
+  status         String        @default("active")
   createdAt      DateTime      @default(now())
   updatedAt      DateTime      @updatedAt
+  conversation   Conversation? @relation(fields: [conversationId], references: [id])
+  initiator      User          @relation("MatchInitiator", fields: [initiatorId], references: [id], onDelete: Cascade)
+  receiver       User          @relation("MatchReceiver", fields: [receiverId], references: [id], onDelete: Cascade)
 }
 
 model MatchRequest {
   id         String   @id @default(uuid())
   senderId   String
   receiverId String
-  status     String   @default("pending") // pending, accepted, rejected
+  status     String   @default("pending")
   message    String?
-  sender     User     @relation("RequestSender", fields: [senderId], references: [id], onDelete: Cascade)
-  receiver   User     @relation("RequestReceiver", fields: [receiverId], references: [id], onDelete: Cascade)
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
+  receiver   User     @relation("RequestReceiver", fields: [receiverId], references: [id], onDelete: Cascade)
+  sender     User     @relation("RequestSender", fields: [senderId], references: [id], onDelete: Cascade)
 
   @@unique([senderId, receiverId])
 }
@@ -161,25 +145,25 @@ model MatchRequest {
 model Conversation {
   id           String             @id @default(uuid())
   languageId   String
+  createdAt    DateTime           @default(now())
+  updatedAt    DateTime           @updatedAt
   language     Language           @relation(fields: [languageId], references: [id])
   match        Match?
   messages     Message[]
   participants UserConversation[]
-  createdAt    DateTime           @default(now())
-  updatedAt    DateTime           @updatedAt
 }
 
 model UserConversation {
   id             String       @id @default(uuid())
   userId         String
   conversationId String
-  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
-  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
   lastReadAt     DateTime?
   isArchived     Boolean      @default(false)
   isMuted        Boolean      @default(false)
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, conversationId])
 }
@@ -189,13 +173,13 @@ model Message {
   conversationId String
   senderId       String
   content        String
-  contentType    String              @default("text") // text, image, audio, video
+  contentType    String              @default("text")
   mediaUrl       String?
-  sender         User                @relation("MessageSender", fields: [senderId], references: [id], onDelete: Cascade)
-  conversation   Conversation        @relation(fields: [conversationId], references: [id], onDelete: Cascade)
-  corrections    MessageCorrection[]
   createdAt      DateTime            @default(now())
   updatedAt      DateTime            @updatedAt
+  conversation   Conversation        @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  sender         User                @relation("MessageSender", fields: [senderId], references: [id], onDelete: Cascade)
+  corrections    MessageCorrection[]
 }
 
 model MessageCorrection {
@@ -204,26 +188,25 @@ model MessageCorrection {
   userId           String
   correctedContent String
   explanation      String?
-  message          Message  @relation(fields: [messageId], references: [id], onDelete: Cascade)
-  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
+  message          Message  @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
-// Gönderi sistemi için
 model Post {
   id         String      @id @default(uuid())
   authorId   String
   content    String
   languageId String?
   isPublic   Boolean     @default(true)
-  author     User        @relation(fields: [authorId], references: [id], onDelete: Cascade)
-  language   Language?   @relation(fields: [languageId], references: [id])
-  media      PostMedia[]
-  likes      PostLike[]
-  comments   Comment[]
   createdAt  DateTime    @default(now())
   updatedAt  DateTime    @updatedAt
+  comments   Comment[]
+  author     User        @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  language   Language?   @relation(fields: [languageId], references: [id])
+  likes      PostLike[]
+  media      PostMedia[]
 }
 
 model PostMedia {
@@ -232,17 +215,17 @@ model PostMedia {
   type        String
   url         String
   description String?
-  post        Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
   createdAt   DateTime @default(now())
+  post        Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
 }
 
 model PostLike {
   id        String   @id @default(uuid())
   postId    String
   userId    String
+  createdAt DateTime @default(now())
   post      Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  createdAt DateTime @default(now())
 
   @@unique([postId, userId])
 }
@@ -253,27 +236,26 @@ model Comment {
   authorId        String
   content         String
   parentCommentId String?
-  post            Post          @relation(fields: [postId], references: [id], onDelete: Cascade)
-  author          User          @relation(fields: [authorId], references: [id], onDelete: Cascade)
-  parentComment   Comment?      @relation("CommentReplies", fields: [parentCommentId], references: [id], onDelete: SetNull)
-  replies         Comment[]     @relation("CommentReplies")
-  likes           CommentLike[]
   createdAt       DateTime      @default(now())
   updatedAt       DateTime      @updatedAt
+  author          User          @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  parentComment   Comment?      @relation("CommentReplies", fields: [parentCommentId], references: [id])
+  replies         Comment[]     @relation("CommentReplies")
+  post            Post          @relation(fields: [postId], references: [id], onDelete: Cascade)
+  likes           CommentLike[]
 }
 
 model CommentLike {
   id        String   @id @default(uuid())
   commentId String
   userId    String
+  createdAt DateTime @default(now())
   comment   Comment  @relation(fields: [commentId], references: [id], onDelete: Cascade)
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  createdAt DateTime @default(now())
 
   @@unique([commentId, userId])
 }
 
-// Hikaye sistemi için
 model Story {
   id         String      @id @default(uuid())
   authorId   String
@@ -283,10 +265,10 @@ model Story {
   languageId String?
   duration   Int         @default(10)
   expiresAt  DateTime
+  createdAt  DateTime    @default(now())
   author     User        @relation(fields: [authorId], references: [id], onDelete: Cascade)
   language   Language?   @relation(fields: [languageId], references: [id])
   views      StoryView[]
-  createdAt  DateTime    @default(now())
 }
 
 model StoryView {
@@ -301,7 +283,6 @@ model StoryView {
   @@unique([storyId, userId])
 }
 
-// Kelime kaydetme sistemi için
 model SavedWord {
   id         String   @id @default(uuid())
   userId     String
@@ -311,13 +292,12 @@ model SavedWord {
   example    String?
   notes      String?
   difficulty String?
-  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  language   Language @relation(fields: [languageId], references: [id], onDelete: Cascade)
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
+  language   Language @relation(fields: [languageId], references: [id], onDelete: Cascade)
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
-// Bildirim sistemi için
 model Notification {
   id         String   @id @default(uuid())
   userId     String
@@ -327,7 +307,13 @@ model Notification {
   entityId   String?
   entityType String?
   isRead     Boolean  @default(false)
-  user       User     @relation("UserNotifications", fields: [userId], references: [id], onDelete: Cascade)
-  actor      User?    @relation("NotificationActor", fields: [actorId], references: [id], onDelete: SetNull)
   createdAt  DateTime @default(now())
+  actor      User?    @relation("NotificationActor", fields: [actorId], references: [id])
+  user       User     @relation("UserNotifications", fields: [userId], references: [id], onDelete: Cascade)
+}
+
+enum LanguageLevel {
+  BEGINNER
+  INTERMEDIATE
+  ADVANCED
 }

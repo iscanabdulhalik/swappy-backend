@@ -33,8 +33,8 @@ export class RegisterDto {
   countryCode?: string;
 
   @IsString()
-  @IsNotEmpty()
-  role: string;
+  @IsOptional()
+  role?: string;
 }
 
 export class LoginDto {
