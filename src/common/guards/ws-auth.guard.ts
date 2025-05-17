@@ -22,6 +22,8 @@ export class WsAuthGuard implements CanActivate {
       const client = context.switchToWs().getClient();
       const headers = client.handshake.headers;
 
+      // TEST MODU GÜVENLIK AÇIĞI - BU KODU ÇIKARALIM
+      /*
       // Test modu için test kullanıcı ID'sine izin ver
       // DEV ortamında kullanılmalı, PROD ortamında bu kod çıkarılmalı
       const testUserId = headers['x-test-user-id'];
@@ -43,6 +45,7 @@ export class WsAuthGuard implements CanActivate {
           throw new WsException('Invalid test user');
         }
       }
+      */
 
       // Normal Firebase Authentication
       const authHeader = headers.authorization;

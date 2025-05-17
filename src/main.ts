@@ -2,6 +2,7 @@ import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { AppModule } from './app.module';
+import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
@@ -29,9 +30,23 @@ async function bootstrap() {
     }),
   );
 
+  // ✅ Swagger kurulumu
+  const config = new DocumentBuilder()
+    .setTitle('API Dokümantasyonu')
+    .setDescription('Projenin otomatik oluşturulan Swagger dökümantasyonu')
+    .setVersion('1.0')
+    .addBearerAuth() // Eğer JWT ile yetkilendirme varsa
+    .build();
+
+  const document = SwaggerModule.createDocument(app, config);
+  SwaggerModule.setup(`${apiPrefix}/docs`, app, document); // Örn: /api/docs
+
   await app.listen(port);
   console.log(
     `Application is running on: http://localhost:${port}/${apiPrefix}`,
+  );
+  console.log(
+    `Swagger docs available at: http://localhost:${port}/${apiPrefix}/docs`,
   );
 }
 

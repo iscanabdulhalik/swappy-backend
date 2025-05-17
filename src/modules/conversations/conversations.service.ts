@@ -3,17 +3,18 @@ import {
   NotFoundException,
   BadRequestException,
   ForbiddenException,
+  Inject,
 } from '@nestjs/common';
 import { PrismaService } from 'prisma/prisma.service';
 import { NotificationGateway } from 'src/websockets/notification.gateway';
+import { CACHE_MANAGER, Cache } from '@nestjs/cache-manager';
 import {
   Conversation,
   Message,
   MessageCorrection,
   UserConversation,
 } from '@prisma/client';
-import { CACHE_MANAGER } from '@nestjs/cache-manager';
-import { Cache } from 'cache-manager';
+
 import {
   CreateMessageDto,
   CreateMediaMessageDto,
@@ -45,15 +46,24 @@ type ConversationWithParticipants = Conversation & {
   }>;
 };
 
+// Cache TTL constants
+const CACHE_TTL = {
+  CONVERSATIONS: 300000, // 5 minutes
+  CONVERSATION_DETAILS: 600000, // 10 minutes
+  MESSAGES: 180000, // 3 minutes
+  USER_LANGUAGES: 1800000, // 30 minutes
+};
+
 @Injectable()
 export class ConversationsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly notificationGateway: NotificationGateway,
+    @Inject(CACHE_MANAGER) private cacheManager: Cache,
   ) {}
 
   /**
-   * Get all conversations for a user
+   * Get all conversations for a user with Redis caching
    */
   async getUserConversations(
     userId: string,
@@ -61,7 +71,16 @@ export class ConversationsService {
     limit = 20,
     offset = 0,
   ): Promise<{ items: Conversation[]; total: number }> {
-    // Get conversations where the user is a participant
+    // Create cache key
+    const cacheKey = `conversations:${userId}:${showArchived}:${limit}:${offset}`;
+
+    // Check cache first
+    const cachedResult = await this.cacheManager.get(cacheKey);
+    if (cachedResult) {
+      return cachedResult as { items: Conversation[]; total: number };
+    }
+
+    // Build where clause
     const where = {
       participants: {
         some: {
@@ -71,50 +90,64 @@ export class ConversationsService {
       },
     };
 
-    // Get total count
-    const total = await this.prisma.conversation.count({ where });
-
-    // Get conversations with related data
-    const conversations = await this.prisma.conversation.findMany({
-      where,
-      include: {
-        language: true,
-        match: true,
-        participants: {
-          include: {
-            user: {
-              select: {
-                id: true,
-                displayName: true,
-                firstName: true,
-                lastName: true,
-                profileImageUrl: true,
+    // Execute queries in parallel
+    const [total, conversations] = await Promise.all([
+      this.prisma.conversation.count({ where }),
+      this.prisma.conversation.findMany({
+        where,
+        include: {
+          language: true,
+          match: true,
+          participants: {
+            include: {
+              user: {
+                select: {
+                  id: true,
+                  displayName: true,
+                  firstName: true,
+                  lastName: true,
+                  profileImageUrl: true,
+                },
               },
             },
           },
+          messages: {
+            orderBy: { createdAt: 'desc' },
+            take: 1,
+          },
         },
-        messages: {
-          orderBy: { createdAt: 'desc' },
-          take: 1,
+        take: limit,
+        skip: offset,
+        orderBy: {
+          updatedAt: 'desc',
         },
-      },
-      take: limit,
-      skip: offset,
-      orderBy: {
-        updatedAt: 'desc',
-      },
-    });
+      }),
+    ]);
 
-    return { items: conversations, total };
+    const result = { items: conversations, total };
+
+    // Cache the result
+    await this.cacheManager.set(cacheKey, result, CACHE_TTL.CONVERSATIONS);
+
+    return result;
   }
 
   /**
-   * Get conversation by ID with participant details
+   * Get conversation by ID with participant details and caching
    */
   async getConversationById(
     conversationId: string,
     userId: string,
   ): Promise<ConversationWithParticipants> {
+    // Create cache key
+    const cacheKey = `conversation:${conversationId}:${userId}`;
+
+    // Check cache first
+    const cachedResult = await this.cacheManager.get(cacheKey);
+    if (cachedResult) {
+      return cachedResult as ConversationWithParticipants;
+    }
+
     // Find the conversation
     const conversation = await this.prisma.conversation.findUnique({
       where: { id: conversationId },
@@ -152,49 +185,61 @@ export class ConversationsService {
       });
     }
 
-    // Fetch native and learning languages for each participant separately
+    // Fetch languages for each participant with caching
     const enhancedParticipants = await Promise.all(
       conversation.participants.map(async (participant) => {
-        const nativeLanguages = await this.prisma.userLanguage.findMany({
-          where: {
-            userId: participant.user.id,
-            isNative: true,
-          },
-          include: {
-            language: true,
-          },
-        });
+        const languageCacheKey = `user-languages:${participant.user.id}`;
+        let languages = await this.cacheManager.get(languageCacheKey);
 
-        const learningLanguages = await this.prisma.userLanguage.findMany({
-          where: {
-            userId: participant.user.id,
-            isLearning: true,
-          },
-          include: {
-            language: true,
-          },
-        });
+        if (!languages) {
+          const [nativeLanguages, learningLanguages] = await Promise.all([
+            this.prisma.userLanguage.findMany({
+              where: { userId: participant.user.id, isNative: true },
+              include: { language: true },
+            }),
+            this.prisma.userLanguage.findMany({
+              where: { userId: participant.user.id, isLearning: true },
+              include: { language: true },
+            }),
+          ]);
+
+          languages = { nativeLanguages, learningLanguages };
+          await this.cacheManager.set(
+            languageCacheKey,
+            languages,
+            CACHE_TTL.USER_LANGUAGES,
+          );
+        }
 
         return {
           ...participant,
           user: {
             ...participant.user,
-            nativeLanguages,
-            learningLanguages,
+            ...(typeof languages === 'object' && languages !== null
+              ? languages
+              : {}),
           },
         };
       }),
     );
 
-    // Return the conversation with enhanced participants
-    return {
+    const result = {
       ...conversation,
       participants: enhancedParticipants,
     } as ConversationWithParticipants;
+
+    // Cache the result
+    await this.cacheManager.set(
+      cacheKey,
+      result,
+      CACHE_TTL.CONVERSATION_DETAILS,
+    );
+
+    return result;
   }
 
   /**
-   * Get messages for a conversation
+   * Get messages for a conversation with caching
    */
   async getConversationMessages(
     conversationId: string,
@@ -205,70 +250,84 @@ export class ConversationsService {
   ): Promise<{ items: Message[]; total: number }> {
     const { limit, offset, before, after } = options;
 
+    // Create cache key including filters
+    const dateFilters = {
+      before: before?.toISOString() || '',
+      after: after?.toISOString() || '',
+    };
+    const cacheKey = `messages:${conversationId}:${limit}:${offset}:${JSON.stringify(dateFilters)}`;
+
+    // Check cache first
+    const cachedResult = await this.cacheManager.get(cacheKey);
+    if (cachedResult) {
+      return cachedResult as { items: Message[]; total: number };
+    }
+
     // Build where clause
     let where: any = { conversationId };
-
     if (before) {
       where.createdAt = { ...(where.createdAt || {}), lt: before };
     }
-
     if (after) {
       where.createdAt = { ...(where.createdAt || {}), gt: after };
     }
 
-    // Get total count
-    const total = await this.prisma.message.count({ where });
-
-    // Get messages
-    const messages = await this.prisma.message.findMany({
-      where,
-      include: {
-        sender: {
-          select: {
-            id: true,
-            displayName: true,
-            firstName: true,
-            lastName: true,
-            profileImageUrl: true,
+    // Execute queries in parallel
+    const [total, messages] = await Promise.all([
+      this.prisma.message.count({ where }),
+      this.prisma.message.findMany({
+        where,
+        include: {
+          sender: {
+            select: {
+              id: true,
+              displayName: true,
+              firstName: true,
+              lastName: true,
+              profileImageUrl: true,
+            },
           },
-        },
-        corrections: {
-          include: {
-            user: {
-              select: {
-                id: true,
-                displayName: true,
-                firstName: true,
-                lastName: true,
+          corrections: {
+            include: {
+              user: {
+                select: {
+                  id: true,
+                  displayName: true,
+                  firstName: true,
+                  lastName: true,
+                },
               },
             },
           },
         },
-      },
-      take: limit,
-      skip: offset,
-      orderBy: {
-        createdAt: 'desc',
-      },
-    });
+        take: limit,
+        skip: offset,
+        orderBy: {
+          createdAt: 'desc',
+        },
+      }),
+    ]);
 
-    return { items: messages, total };
+    const result = { items: messages, total };
+
+    // Cache the result
+    await this.cacheManager.set(cacheKey, result, CACHE_TTL.MESSAGES);
+
+    return result;
   }
 
   /**
-   * Create a new message
+   * Create a new message with cache invalidation
    */
   async createMessage(
     senderId: string,
     conversationId: string,
     messageDto: CreateMessageDto,
   ): Promise<Message> {
-    // Check if conversation exists and user is a participant
+    // Check conversation and permissions
     const conversation = await this.prisma.conversation.findUnique({
       where: { id: conversationId },
-      include: {
-        participants: true,
-      },
+      include: { participants: true },
     });
 
     if (!conversation) {
@@ -285,40 +344,51 @@ export class ConversationsService {
       });
     }
 
-    // Create the message
-    const message = await this.prisma.message.create({
-      data: {
-        conversationId,
-        senderId,
-        content: messageDto.content,
-        contentType: messageDto.contentType || 'text',
-      },
-      include: {
-        sender: {
-          select: {
-            id: true,
-            displayName: true,
-            firstName: true,
-            lastName: true,
-            profileImageUrl: true,
+    // Create message with transaction
+    const message = await this.prisma.$transaction(async (tx) => {
+      const newMessage = await tx.message.create({
+        data: {
+          conversationId,
+          senderId,
+          content: messageDto.content,
+          contentType: messageDto.contentType || 'text',
+        },
+        include: {
+          sender: {
+            select: {
+              id: true,
+              displayName: true,
+              firstName: true,
+              lastName: true,
+              profileImageUrl: true,
+            },
           },
         },
-      },
+      });
+
+      // Update conversation timestamp
+      await tx.conversation.update({
+        where: { id: conversationId },
+        data: { updatedAt: new Date() },
+      });
+
+      // Update user stats
+      await tx.userStats.update({
+        where: { userId: senderId },
+        data: { messagesCount: { increment: 1 } },
+      });
+
+      return newMessage;
     });
 
-    // Update conversation lastUpdated timestamp
-    await this.prisma.conversation.update({
-      where: { id: conversationId },
-      data: { updatedAt: new Date() },
-    });
+    // Invalidate caches
+    await this.invalidateConversationCaches(conversationId);
+    await this.invalidateMessageCaches(conversationId);
+    await this.invalidateUserConversationCaches(
+      conversation.participants.map((p) => p.userId),
+    );
 
-    // Update user stats
-    await this.prisma.userStats.update({
-      where: { userId: senderId },
-      data: { messagesCount: { increment: 1 } },
-    });
-
-    // Notify other participants
+    // Notify participants
     this.notifyParticipants(conversation, senderId, {
       type: 'new_message',
       message,
@@ -328,19 +398,17 @@ export class ConversationsService {
   }
 
   /**
-   * Create a media message
+   * Create a media message with cache invalidation
    */
   async createMediaMessage(
     senderId: string,
     conversationId: string,
     messageDto: CreateMediaMessageDto,
   ): Promise<Message> {
-    // Check if conversation exists and user is a participant
+    // Check conversation and permissions
     const conversation = await this.prisma.conversation.findUnique({
       where: { id: conversationId },
-      include: {
-        participants: true,
-      },
+      include: { participants: true },
     });
 
     if (!conversation) {
@@ -357,41 +425,52 @@ export class ConversationsService {
       });
     }
 
-    // Create the media message
-    const message = await this.prisma.message.create({
-      data: {
-        conversationId,
-        senderId,
-        content: messageDto.content || '',
-        contentType: messageDto.contentType,
-        mediaUrl: messageDto.mediaUrl,
-      },
-      include: {
-        sender: {
-          select: {
-            id: true,
-            displayName: true,
-            firstName: true,
-            lastName: true,
-            profileImageUrl: true,
+    // Create media message with transaction
+    const message = await this.prisma.$transaction(async (tx) => {
+      const newMessage = await tx.message.create({
+        data: {
+          conversationId,
+          senderId,
+          content: messageDto.content || '',
+          contentType: messageDto.contentType,
+          mediaUrl: messageDto.mediaUrl,
+        },
+        include: {
+          sender: {
+            select: {
+              id: true,
+              displayName: true,
+              firstName: true,
+              lastName: true,
+              profileImageUrl: true,
+            },
           },
         },
-      },
+      });
+
+      // Update conversation timestamp
+      await tx.conversation.update({
+        where: { id: conversationId },
+        data: { updatedAt: new Date() },
+      });
+
+      // Update user stats
+      await tx.userStats.update({
+        where: { userId: senderId },
+        data: { messagesCount: { increment: 1 } },
+      });
+
+      return newMessage;
     });
 
-    // Update conversation lastUpdated timestamp
-    await this.prisma.conversation.update({
-      where: { id: conversationId },
-      data: { updatedAt: new Date() },
-    });
+    // Invalidate caches
+    await this.invalidateConversationCaches(conversationId);
+    await this.invalidateMessageCaches(conversationId);
+    await this.invalidateUserConversationCaches(
+      conversation.participants.map((p) => p.userId),
+    );
 
-    // Update user stats
-    await this.prisma.userStats.update({
-      where: { userId: senderId },
-      data: { messagesCount: { increment: 1 } },
-    });
-
-    // Notify other participants
+    // Notify participants
     this.notifyParticipants(conversation, senderId, {
       type: 'new_message',
       message,
@@ -425,15 +504,16 @@ export class ConversationsService {
       });
     }
 
-    // Update the lastReadAt timestamp
-    return this.prisma.userConversation.update({
-      where: {
-        id: userConversation.id,
-      },
-      data: {
-        lastReadAt: new Date(),
-      },
+    // Update last read timestamp
+    const result = await this.prisma.userConversation.update({
+      where: { id: userConversation.id },
+      data: { lastReadAt: new Date() },
     });
+
+    // Invalidate conversation cache for this user
+    await this.invalidateUserConversationCaches([userId]);
+
+    return result;
   }
 
   /**
@@ -449,9 +529,7 @@ export class ConversationsService {
       where: { id: messageId },
       include: {
         conversation: {
-          include: {
-            participants: true,
-          },
+          include: { participants: true },
         },
       },
     });
@@ -463,7 +541,7 @@ export class ConversationsService {
       });
     }
 
-    // Check if user is in the conversation
+    // Check permissions
     if (!this.isUserInConversation(message.conversation, userId)) {
       throw new ForbiddenException({
         error: 'not_participant',
@@ -471,7 +549,7 @@ export class ConversationsService {
       });
     }
 
-    // Create the correction
+    // Create correction
     const correction = await this.prisma.messageCorrection.create({
       data: {
         messageId,
@@ -491,7 +569,10 @@ export class ConversationsService {
       },
     });
 
-    // Notify the message sender
+    // Invalidate message caches
+    await this.invalidateMessageCaches(message.conversationId);
+
+    // Notify message sender
     if (message.senderId !== userId) {
       this.notificationGateway.sendNotification(message.senderId, {
         type: 'message_correction',
@@ -530,14 +611,15 @@ export class ConversationsService {
     }
 
     // Update archive status
-    return this.prisma.userConversation.update({
-      where: {
-        id: userConversation.id,
-      },
-      data: {
-        isArchived: dto.isArchived,
-      },
+    const result = await this.prisma.userConversation.update({
+      where: { id: userConversation.id },
+      data: { isArchived: dto.isArchived },
     });
+
+    // Invalidate user conversation caches
+    await this.invalidateUserConversationCaches([userId]);
+
+    return result;
   }
 
   /**
@@ -566,32 +648,38 @@ export class ConversationsService {
     }
 
     // Update mute status
-    return this.prisma.userConversation.update({
-      where: {
-        id: userConversation.id,
-      },
-      data: {
-        isMuted: dto.isMuted,
-      },
+    const result = await this.prisma.userConversation.update({
+      where: { id: userConversation.id },
+      data: { isMuted: dto.isMuted },
     });
+
+    // Invalidate user conversation caches
+    await this.invalidateUserConversationCaches([userId]);
+
+    return result;
   }
 
   /**
-   * Request a translation for a message
+   * Request a translation for a message with caching
    */
   async translateMessage(
     userId: string,
     messageId: string,
     dto: TranslationRequestDto,
   ): Promise<{ original: string; translated: string }> {
+    // Check cache first
+    const cacheKey = `translation:${messageId}:${dto.targetLanguage}`;
+    const cachedTranslation = await this.cacheManager.get(cacheKey);
+    if (cachedTranslation) {
+      return cachedTranslation as { original: string; translated: string };
+    }
+
     // Find the message
     const message = await this.prisma.message.findUnique({
       where: { id: messageId },
       include: {
         conversation: {
-          include: {
-            participants: true,
-          },
+          include: { participants: true },
         },
       },
     });
@@ -603,7 +691,7 @@ export class ConversationsService {
       });
     }
 
-    // Check if user is in the conversation
+    // Check permissions
     if (!this.isUserInConversation(message.conversation, userId)) {
       throw new ForbiddenException({
         error: 'not_participant',
@@ -612,11 +700,15 @@ export class ConversationsService {
     }
 
     // TODO: Implement actual translation service
-    // For now return a placeholder translated message
-    return {
+    const result = {
       original: message.content,
       translated: `[Translated to ${dto.targetLanguage}] ${message.content}`,
     };
+
+    // Cache translation for 24 hours
+    await this.cacheManager.set(cacheKey, result, 86400000);
+
+    return result;
   }
 
   /**
@@ -632,9 +724,7 @@ export class ConversationsService {
       where: { id: messageId },
       include: {
         conversation: {
-          include: {
-            participants: true,
-          },
+          include: { participants: true },
         },
       },
     });
@@ -646,7 +736,7 @@ export class ConversationsService {
       });
     }
 
-    // Check if user is in the conversation
+    // Check permissions
     if (!this.isUserInConversation(message.conversation, userId)) {
       throw new ForbiddenException({
         error: 'not_participant',
@@ -654,15 +744,18 @@ export class ConversationsService {
       });
     }
 
-    // TODO: Store reactions in a proper table/model
-    // For now we're just returning what would be stored
+    // Create reaction
     const reaction = {
       messageId,
       userId,
       reaction: dto.reaction,
     };
 
-    // Notify the message sender
+    // TODO: Store reactions in proper table
+    // For now just invalidate message caches
+    await this.invalidateMessageCaches(message.conversationId);
+
+    // Notify message sender
     if (message.senderId !== userId) {
       this.notificationGateway.sendNotification(message.senderId, {
         type: 'message_reaction',
@@ -688,9 +781,7 @@ export class ConversationsService {
       where: { id: messageId },
       include: {
         conversation: {
-          include: {
-            participants: true,
-          },
+          include: { participants: true },
         },
       },
     });
@@ -702,7 +793,7 @@ export class ConversationsService {
       });
     }
 
-    // Check if user is in the conversation
+    // Check permissions
     if (!this.isUserInConversation(message.conversation, userId)) {
       throw new ForbiddenException({
         error: 'not_participant',
@@ -711,7 +802,8 @@ export class ConversationsService {
     }
 
     // TODO: Implement proper reaction removal
-    // This is a placeholder for when a real reaction model is implemented
+    // For now just invalidate caches
+    await this.invalidateMessageCaches(message.conversationId);
   }
 
   /**
@@ -722,7 +814,7 @@ export class ConversationsService {
     conversationId: string,
     dto: CallDto,
   ): Promise<{ callId: string; conversationId: string; type: string }> {
-    // Check if conversation exists and user is a participant
+    // Check conversation and permissions
     const conversation = await this.prisma.conversation.findUnique({
       where: { id: conversationId },
       include: {
@@ -753,8 +845,7 @@ export class ConversationsService {
       });
     }
 
-    // TODO: Implement proper call functionality with a Call model
-    // For now, return a mock call object
+    // Create call
     const callId = `call-${Date.now()}`;
     const callData = {
       callId,
@@ -762,7 +853,10 @@ export class ConversationsService {
       type: dto.type,
     };
 
-    // Notify other participants
+    // Cache active call
+    await this.cacheManager.set(`call:${callId}`, callData, 3600000); // 1 hour
+
+    // Notify participants
     this.notifyParticipants(conversation, userId, {
       type: 'incoming_call',
       call: callData,
@@ -779,8 +873,9 @@ export class ConversationsService {
     userId: string,
     callId: string,
   ): Promise<{ callId: string; status: string }> {
-    // TODO: Implement proper call ending functionality
-    // For now, return a mock response
+    // Remove from cache
+    await this.cacheManager.del(`call:${callId}`);
+
     return {
       callId,
       status: 'ended',
@@ -797,20 +892,29 @@ export class ConversationsService {
   }
 
   /**
-   * Check if a user has access to a conversation
+   * Check if a user has access to a conversation with caching
    */
   async userHasAccessToConversation(
     userId: string,
     conversationId: string,
   ): Promise<boolean> {
+    const cacheKey = `access:${userId}:${conversationId}`;
+    const cached = await this.cacheManager.get(cacheKey);
+
+    if (cached !== null && cached !== undefined) {
+      return cached as boolean;
+    }
+
     const count = await this.prisma.userConversation.count({
-      where: {
-        userId,
-        conversationId,
-      },
+      where: { userId, conversationId },
     });
 
-    return count > 0;
+    const hasAccess = count > 0;
+
+    // Cache for 10 minutes
+    await this.cacheManager.set(cacheKey, hasAccess, 600000);
+
+    return hasAccess;
   }
 
   /**
@@ -821,7 +925,7 @@ export class ConversationsService {
     languageId: string,
     matchId?: string,
   ): Promise<Conversation> {
-    // Ensure at least 2 users
+    // Validation
     if (userIds.length < 2) {
       throw new BadRequestException({
         error: 'invalid_participants',
@@ -829,7 +933,7 @@ export class ConversationsService {
       });
     }
 
-    // Check if language exists
+    // Check language exists
     const language = await this.prisma.language.findUnique({
       where: { id: languageId },
     });
@@ -841,15 +945,13 @@ export class ConversationsService {
       });
     }
 
-    // Create conversation with participants
-    return this.prisma.conversation.create({
+    // Create conversation
+    const conversation = await this.prisma.conversation.create({
       data: {
         languageId,
         ...(matchId ? { match: { connect: { id: matchId } } } : {}),
         participants: {
-          create: userIds.map((userId) => ({
-            userId,
-          })),
+          create: userIds.map((userId) => ({ userId })),
         },
       },
       include: {
@@ -869,6 +971,11 @@ export class ConversationsService {
         },
       },
     });
+
+    // Invalidate user conversation caches
+    await this.invalidateUserConversationCaches(userIds);
+
+    return conversation;
   }
 
   /**
@@ -887,5 +994,44 @@ export class ConversationsService {
           conversationId: conversation.id,
         });
       });
+  }
+
+  // Cache invalidation methods
+  private async invalidateUserConversationCaches(
+    userIds: string[],
+  ): Promise<void> {
+    const promises = userIds.map(async (userId) => {
+      const keys = await (this.cacheManager as any).store.keys(
+        `conversations:${userId}:*`,
+      );
+      const deletePromises: Promise<void>[] = keys.map((key: string) =>
+        this.cacheManager.del(key),
+      );
+      return Promise.all(deletePromises);
+    });
+
+    await Promise.all(promises);
+  }
+
+  private async invalidateConversationCaches(
+    conversationId: string,
+  ): Promise<void> {
+    const keys = await (this.cacheManager as any).store.keys(
+      `conversation:${conversationId}:*`,
+    );
+    const deletePromises: Promise<void>[] = keys.map((key: string) =>
+      this.cacheManager.del(key),
+    );
+    await Promise.all(deletePromises);
+  }
+
+  private async invalidateMessageCaches(conversationId: string): Promise<void> {
+    const keys = await (this.cacheManager as any).store.keys(
+      `messages:${conversationId}:*`,
+    );
+    const deletePromises = keys.map((key: string) =>
+      this.cacheManager.del(key),
+    );
+    await Promise.all(deletePromises);
   }
 }
