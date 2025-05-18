@@ -13,6 +13,9 @@ export class OllamaAIService implements AIService {
   private readonly logger = new Logger(OllamaAIService.name);
   private readonly ollamaBaseUrl: string;
   private readonly defaultModel: string;
+  private isServiceAvailable = true;
+  private lastCheckTime = 0;
+  private readonly checkInterval = 60000; // 1 dakika
 
   constructor(private readonly configService: ConfigService) {
     this.ollamaBaseUrl = this.configService.get<string>(
@@ -27,22 +30,59 @@ export class OllamaAIService implements AIService {
     this.logger.log(
       `Ollama API initialized with URL: ${this.ollamaBaseUrl} and default model: ${this.defaultModel}`,
     );
+
+    // Servisin kullanılabilirliğini kontrol et
+    this.checkServiceAvailability();
   }
 
-  /**
-   * Generate text using Ollama local LLM service
-   *
-   * @param request - Text generation request parameters
-   * @returns Generated text response
-   * @throws AppException if service is unavailable or generation fails
-   */
+  private async checkServiceAvailability() {
+    const now = Date.now();
+
+    // Son kontrolden beri yeterli zaman geçtiyse yeniden kontrol et
+    if (now - this.lastCheckTime > this.checkInterval) {
+      this.lastCheckTime = now;
+
+      try {
+        const response = await axios.get(`${this.ollamaBaseUrl}/api/version`, {
+          timeout: 2000, // 2 saniye timeout
+        });
+
+        if (response.status === 200) {
+          if (!this.isServiceAvailable) {
+            this.logger.log('Ollama servisi artık kullanılabilir');
+          }
+          this.isServiceAvailable = true;
+        } else {
+          this.isServiceAvailable = false;
+          this.logger.warn(
+            `Ollama servisi beklenmedik durum kodu döndürdü: ${response.status}`,
+          );
+        }
+      } catch (error) {
+        this.isServiceAvailable = false;
+        this.logger.warn(`Ollama servisi kullanılamıyor: ${error.message}`);
+      }
+    }
+
+    return this.isServiceAvailable;
+  }
+
   async generateText(
     request: TextGenerationRequest,
   ): Promise<TextGenerationResponse> {
+    // Servis kullanılabilirliğini kontrol et
+    const isAvailable = await this.checkServiceAvailability();
+
+    if (!isAvailable) {
+      throw AppException.serviceUnavailable(
+        'Yerel AI servisi şu anda kullanılamıyor. Lütfen daha sonra tekrar deneyin veya cloud tabanlı bir servis kullanın.',
+      );
+    }
+
     try {
       const model = request.model || this.defaultModel;
 
-      this.logger.debug(`Generating text with model ${model}`);
+      this.logger.debug(`${model} modeli ile metin oluşturuluyor`);
 
       const response = await axios.post(`${this.ollamaBaseUrl}/api/generate`, {
         model: model,
@@ -55,7 +95,7 @@ export class OllamaAIService implements AIService {
       });
 
       if (!response.data || !response.data.response) {
-        throw new Error('Invalid response from Ollama API');
+        throw new Error("Ollama API'den geçersiz yanıt");
       }
 
       return {
@@ -64,19 +104,20 @@ export class OllamaAIService implements AIService {
       };
     } catch (error) {
       this.logger.error(
-        `Ollama text generation error: ${error.message}`,
+        `Ollama metin oluşturma hatası: ${error.message}`,
         error.stack,
       );
 
-      // Network error or server not available
+      // Bağlantı hatası veya sunucu kullanılamıyor
       if (error.code === 'ECONNREFUSED' || error.code === 'ENOTFOUND') {
+        this.isServiceAvailable = false;
         throw AppException.serviceUnavailable(
-          'Local AI service is not available. Please ensure Ollama is running.',
+          "Yerel AI servisi kullanılamıyor. Lütfen Ollama'nın çalıştığından emin olun.",
         );
       }
 
       throw AppException.serviceUnavailable(
-        `Local AI service error: ${error.message}`,
+        `Yerel AI servisi hatası: ${error.message}`,
       );
     }
   }

@@ -45,11 +45,29 @@ export class WebsocketsGateway
   async handleConnection(client: Socket) {
     this.logger.log(`Client connected: ${client.id}`);
 
-    // Websocket connection requires authentication within 10 seconds
+    // Zaman aşımı süresini ortam değişkenine bağlı olarak belirle
+    // Prod: 30s, Dev: 60s
+    const authTimeoutMs = process.env.NODE_ENV === 'production' ? 30000 : 60000;
+
+    // Websocket bağlantısı belirtilen süre içinde kimlik doğrulaması gerektiriyor
     const timeout = setTimeout(() => {
+      this.logger.warn(
+        `Authentication timeout for client ${client.id}, disconnecting...`,
+      );
       this.handleDisconnect(client);
       client.disconnect(true);
-    }, 10000);
+    }, authTimeoutMs);
+
+    // Yeniden bağlantı mekanizması ekleyelim
+    client.on('disconnect', (reason) => {
+      if (reason === 'transport error' || reason === 'transport close') {
+        this.logger.log(
+          `Client ${client.id} disconnected due to transport issue, allowing reconnect`,
+        );
+        // Özel bir yeniden bağlantı olayı gönderebiliriz
+        client.emit('reconnect_allowed');
+      }
+    });
 
     client.on(CommonEvents.AUTHENTICATE, async (token: string) => {
       clearTimeout(timeout);

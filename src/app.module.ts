@@ -18,18 +18,50 @@ import { NotificationsModule } from './modules/notifications/notifications.modul
 import { TestAuthService } from './common/services/test-auth.service';
 import { ValidationHelper } from './common/helpers/validation.helper';
 import firebaseConfig from './configs/firebase.config';
+import { env } from './configs/environment';
+import databaseConfig from './configs/database.config';
+import * as redisStore from 'cache-manager-redis-store';
+import { ThrottlerModule } from '@nestjs/throttler';
+import { TransactionHelper } from './common/helpers/transaction.helper';
 
 @Module({
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
-      load: [firebaseConfig],
+      load: [firebaseConfig, databaseConfig],
+      cache: true,
     }),
-    CacheModule.register({
+
+    ThrottlerModule.forRoot([
+      {
+        ttl: 60,
+        limit: env.NODE_ENV === 'production' ? 50 : 1000, // Prod: 50, Dev: 1000 req/min
+      },
+    ]),
+
+    CacheModule.registerAsync({
       isGlobal: true,
-      ttl: 60 * 60 * 1000, // 1 saat
-      max: 100, // En fazla 100 öğe
+      imports: [ConfigModule],
+      useFactory: () => {
+        const config = {
+          ttl: env.CACHE_TTL,
+          max: env.CACHE_MAX_ITEMS,
+        };
+
+        // Redis URL varsa, Redis store kullan
+        if (env.REDIS_URL) {
+          return {
+            ...config,
+            store: redisStore,
+            url: env.REDIS_URL,
+          };
+        }
+
+        // Yoksa in-memory cache kullan
+        return config;
+      },
     }),
+
     PrismaModule,
     AuthModule,
     UsersModule,
@@ -43,6 +75,7 @@ import firebaseConfig from './configs/firebase.config';
     NotificationsModule,
   ],
   providers: [
+    TransactionHelper,
     {
       provide: APP_FILTER,
       useClass: HttpExceptionFilter,
@@ -54,6 +87,6 @@ import firebaseConfig from './configs/firebase.config';
     TestAuthService,
     ValidationHelper,
   ],
-  exports: [TestAuthService, ValidationHelper],
+  exports: [TestAuthService, ValidationHelper, TransactionHelper],
 })
 export class AppModule {}

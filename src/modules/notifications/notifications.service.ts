@@ -5,6 +5,7 @@ import { NotificationRepository } from './repositories/notification.repository';
 import { NotificationSettingsService } from './services/notification.service';
 import { ValidationHelper } from 'src/common/helpers/validation.helper';
 import { AppException } from 'src/common/exceptions/app-exceptions';
+import { PrismaService } from 'prisma/prisma.service';
 
 @Injectable()
 export class NotificationsService {
@@ -15,6 +16,7 @@ export class NotificationsService {
     private readonly notificationSettingsService: NotificationSettingsService,
     private readonly notificationGateway: NotificationGateway,
     private readonly validationHelper: ValidationHelper,
+    private readonly prisma: PrismaService,
   ) {}
 
   async getNotifications(
@@ -136,9 +138,6 @@ export class NotificationsService {
     }
   }
 
-  /**
-   * Create a notification
-   */
   async createNotification(data: {
     userId: string;
     actorId?: string;
@@ -148,32 +147,60 @@ export class NotificationsService {
     entityType?: string;
   }) {
     try {
-      // Create notification in database
+      const userSettings = await this.prisma.userSettings.findUnique({
+        where: { userId: data.userId },
+        include: {
+          notificationPreferences: {
+            where: {
+              type: data.type as any,
+            },
+          },
+        },
+      });
+
+      if (
+        userSettings &&
+        !userSettings.emailNotifications &&
+        !userSettings.pushNotifications
+      ) {
+        this.logger.log(
+          `Kullanıcı ${data.userId} için bildirimler devre dışı, bildirim oluşturulmadı`,
+        );
+        return null;
+      }
+
+      const preference = userSettings?.notificationPreferences?.[0];
+      if (preference && !preference.emailEnabled && !preference.pushEnabled) {
+        this.logger.log(
+          `Kullanıcı ${data.userId} için ${data.type} türünde bildirimler devre dışı`,
+        );
+        return null;
+      }
+
       const notification =
         await this.notificationRepository.createNotification(data);
 
-      // Send real-time notification
-      this.notificationGateway.sendNotification(data.userId, {
-        ...notification,
-        isNew: true,
-      });
+      if (!preference || preference.pushEnabled) {
+        this.notificationGateway.sendNotification(data.userId, {
+          ...notification,
+          isNew: true,
+        });
 
-      // Update unread count
-      const unreadCount = await this.notificationRepository.getUnreadCount(
-        data.userId,
-      );
-      this.notificationGateway.updateNotificationCount(
-        data.userId,
-        unreadCount,
-      );
+        const unreadCount = await this.notificationRepository.getUnreadCount(
+          data.userId,
+        );
+        this.notificationGateway.updateNotificationCount(
+          data.userId,
+          unreadCount,
+        );
+      }
 
       return notification;
     } catch (error) {
       this.logger.error(
-        `Error creating notification: ${error.message}`,
+        `Bildirim oluşturma hatası: ${error.message}`,
         error.stack,
       );
-      // Don't rethrow - notification creation should not break the main flow
     }
   }
 
