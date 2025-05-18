@@ -1,4 +1,4 @@
-import { Injectable, OnModuleInit } from '@nestjs/common';
+import { Injectable, OnModuleInit, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as admin from 'firebase-admin';
 import axios from 'axios';
@@ -7,27 +7,63 @@ import axios from 'axios';
 export class FirebaseAdminService implements OnModuleInit {
   private firebaseApp: admin.app.App;
   private apiKey: string;
+  private readonly logger = new Logger(FirebaseAdminService.name);
 
   constructor(private configService: ConfigService) {}
 
   onModuleInit() {
-    const firebaseConfig = this.configService.get('firebase');
+    try {
+      const firebaseConfig = this.configService.get('firebase');
 
-    // Firebase Admin SDK için initialization
-    this.firebaseApp = admin.initializeApp({
-      credential: admin.credential.cert({
-        projectId: firebaseConfig.projectId,
-        privateKey: firebaseConfig.privateKey.replace(/\\n/g, '\n'),
-        clientEmail: firebaseConfig.clientEmail,
-      }),
-      databaseURL: firebaseConfig.databaseURL,
-    });
+      if (!firebaseConfig) {
+        this.logger.error('Firebase configuration is missing');
+        return;
+      }
 
-    // REST API için gerekli API Key
-    this.apiKey = firebaseConfig.apiKey;
+      try {
+        this.firebaseApp = admin.app();
+        this.logger.log('Using existing Firebase Admin app');
+      } catch (error) {
+        if (
+          !firebaseConfig.admin ||
+          !firebaseConfig.admin.projectId ||
+          !firebaseConfig.admin.clientEmail ||
+          !firebaseConfig.admin.privateKey
+        ) {
+          this.logger.error('Firebase Admin SDK credentials are incomplete');
+          return;
+        }
+
+        this.firebaseApp = admin.initializeApp({
+          credential: admin.credential.cert({
+            projectId: firebaseConfig.admin.projectId,
+            privateKey: firebaseConfig.admin.privateKey,
+            clientEmail: firebaseConfig.admin.clientEmail,
+          }),
+          databaseURL: firebaseConfig.databaseURL,
+        });
+        this.logger.log('Firebase Admin SDK initialized successfully');
+      }
+
+      this.apiKey = firebaseConfig.apiKey;
+      if (!this.apiKey) {
+        this.logger.warn(
+          'Firebase API Key is missing, REST API calls may fail',
+        );
+      }
+    } catch (error) {
+      this.logger.error(
+        `Failed to initialize Firebase Admin: ${error.message}`,
+        error.stack,
+      );
+    }
   }
 
   getAuth(): admin.auth.Auth {
+    if (!this.firebaseApp) {
+      this.logger.error('Firebase Admin SDK is not initialized');
+      throw new Error('Firebase Admin SDK is not initialized');
+    }
     return this.firebaseApp.auth();
   }
 
@@ -117,7 +153,6 @@ export class FirebaseAdminService implements OnModuleInit {
     }
   }
 
-  // firebase-admin.service.ts - Eksik metodları ekleyelim
   async generatePasswordResetLink(email: string): Promise<string> {
     try {
       // Firebase Auth REST API ile şifre sıfırlama bağlantısı oluştur

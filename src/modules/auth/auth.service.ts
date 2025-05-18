@@ -1,4 +1,3 @@
-// auth.service.ts için iyileştirmeler
 import {
   Injectable,
   BadRequestException,
@@ -18,6 +17,7 @@ import {
   ResetPasswordDto,
 } from './dto/auth.dto';
 import { User } from '@prisma/client';
+import { AppException } from 'src/common/exceptions/app-exceptions';
 
 @Injectable()
 export class AuthService {
@@ -41,13 +41,11 @@ export class AuthService {
     }
 
     try {
-      // Create user in Firebase
       const firebaseUser = await this.firebaseAdmin.createUser(
         registerDto.email,
         registerDto.password,
       );
 
-      // Create user in our database
       const newUser = await this.prisma.user.create({
         data: {
           email: registerDto.email,
@@ -73,10 +71,7 @@ export class AuthService {
       return newUser;
     } catch (error) {
       this.logger.error(`Registration failed: ${error.message}`, error.stack);
-      throw new BadRequestException({
-        error: 'registration_failed',
-        message: 'Failed to register user',
-      });
+      throw AppException.badRequest('bad_request', 'authentication_failed');
     }
   }
 
@@ -88,7 +83,6 @@ export class AuthService {
         loginDto.password,
       );
 
-      // Check if user exists in database
       const user = await this.prisma.user.findUnique({
         where: { email: loginDto.email },
         include: {
@@ -104,23 +98,18 @@ export class AuthService {
         });
       }
 
-      // Update lastActiveDate
       await this.prisma.userStats.update({
         where: { userId: user.id },
         data: { lastActiveDate: new Date() },
       });
 
-      // Return user and token
       return {
         user,
         idToken: firebaseAuth.idToken,
       };
     } catch (error) {
       this.logger.error(`Authentication failed: ${error.message}`, error.stack);
-      throw new UnauthorizedException({
-        error: 'authentication_failed',
-        message: 'Authentication failed',
-      });
+      throw AppException.unauthorized('authentication_failed');
     }
   }
 
@@ -141,14 +130,12 @@ export class AuthService {
       if (!user) {
         const firebaseUser = await this.firebaseAdmin.getUser(decodedToken.uid);
 
-        // Check if user exists with email before creating
         if (firebaseUser.email) {
           const existingUser = await this.prisma.user.findUnique({
             where: { email: firebaseUser.email },
           });
 
           if (existingUser) {
-            // Update Firebase UID if found by email
             user = await this.prisma.user.update({
               where: { id: existingUser.id },
               data: { firebaseUid: firebaseUser.uid },
@@ -161,7 +148,6 @@ export class AuthService {
           }
         }
 
-        // Create new user automatically
         return this.prisma.user.create({
           data: {
             email: firebaseUser.email || `${firebaseUser.uid}@unknown.com`,
@@ -185,7 +171,6 @@ export class AuthService {
         });
       }
 
-      // Update lastActiveDate
       await this.prisma.userStats.update({
         where: { userId: user.id },
         data: { lastActiveDate: new Date() },
@@ -197,10 +182,7 @@ export class AuthService {
         `Firebase authentication failed: ${error.message}`,
         error.stack,
       );
-      throw new UnauthorizedException({
-        error: 'invalid_token',
-        message: 'Invalid or expired authentication token',
-      });
+      throw AppException.unauthorized('firebase_auth_failed');
     }
   }
 
@@ -289,28 +271,21 @@ export class AuthService {
     }
 
     try {
-      // Delete from Firebase first
       await this.firebaseAdmin.deleteUser(user.firebaseUid);
 
-      // Then delete from database
       await this.prisma.user.delete({
         where: { id },
       });
     } catch (error) {
       this.logger.error(`User deletion failed: ${error.message}`, error.stack);
-      throw new InternalServerErrorException({
-        error: 'user_deletion_failed',
-        message: 'Failed to delete user',
-      });
+      throw AppException.internal('User deletion failed');
     }
   }
 
   async authenticateWithGoogle(idToken: string): Promise<User> {
     try {
-      // Firebase ID token'ı doğrula
       const decodedToken = await this.firebaseAdmin.verifyIdToken(idToken);
 
-      // Email doğrulaması yap
       if (!decodedToken.email) {
         throw new BadRequestException({
           error: 'invalid_account',
@@ -318,7 +293,6 @@ export class AuthService {
         });
       }
 
-      // Kullanıcı zaten var mı kontrol et (Firebase UID ile)
       let user = await this.prisma.user.findUnique({
         where: { firebaseUid: decodedToken.uid },
         include: {
@@ -327,7 +301,6 @@ export class AuthService {
         },
       });
 
-      // Kullanıcı email ile de kontrol et (Firebase UID değişmiş olabilir)
       if (!user && decodedToken.email) {
         user = await this.prisma.user.findUnique({
           where: { email: decodedToken.email },
@@ -337,7 +310,6 @@ export class AuthService {
           },
         });
 
-        // Eğer email ile bulunduysa, Firebase UID'yi güncelle
         if (user) {
           user = await this.prisma.user.update({
             where: { id: user.id },
@@ -350,12 +322,9 @@ export class AuthService {
         }
       }
 
-      // Eğer kullanıcı yoksa yeni oluştur
       if (!user) {
-        // Google hesabı bilgilerini al
         const firebaseUser = await this.firebaseAdmin.getUser(decodedToken.uid);
 
-        // Email'in kesinlikle var olduğundan emin ol
         const email = firebaseUser.email;
         if (!email) {
           throw new BadRequestException({
@@ -366,7 +335,7 @@ export class AuthService {
 
         user = await this.prisma.user.create({
           data: {
-            email: email, // null veya undefined olma ihtimalini elimine ettik
+            email: email,
             firebaseUid: firebaseUser.uid,
             displayName:
               firebaseUser.displayName || email.split('@')[0] || 'User',
@@ -391,14 +360,10 @@ export class AuthService {
         `Google authentication failed: ${error.message}`,
         error.stack,
       );
-      throw new UnauthorizedException({
-        error: 'google_auth_failed',
-        message: 'Google authentication failed',
-      });
+      throw AppException.unauthorized('google_auth_failed');
     }
   }
 
-  // New method for updating user profile
   async updateProfile(
     userId: string,
     updateProfileDto: UpdateProfileDto,
@@ -425,10 +390,7 @@ export class AuthService {
           `Firebase email update failed: ${error.message}`,
           error.stack,
         );
-        throw new BadRequestException({
-          error: 'email_update_failed',
-          message: 'Failed to update email in authentication provider',
-        });
+        throw AppException.internal('email_update_failed');
       }
     }
 
@@ -443,7 +405,6 @@ export class AuthService {
     });
   }
 
-  // New method for password reset
   async resetPassword(resetPasswordDto: ResetPasswordDto): Promise<void> {
     const { email } = resetPasswordDto;
 
@@ -453,43 +414,30 @@ export class AuthService {
     } catch (error) {
       this.logger.error(`Password reset failed: ${error.message}`, error.stack);
       // Don't reveal if the email exists for security reasons
-      throw new BadRequestException({
-        error: 'password_reset_failed',
-        message:
-          'If your email is registered, you will receive a password reset link',
-      });
+      throw AppException.badRequest('bad_request', 'password_reset_failed');
     }
   }
 
-  // New method for verifying email
   async sendEmailVerification(userId: string): Promise<void> {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
     });
 
     if (!user) {
-      throw new NotFoundException({
-        error: 'user_not_found',
-        message: 'User not found',
-      });
+      throw AppException.notFound('user_not_found', 'User not found');
     }
 
     try {
-      // This sends a verification email to the user
       await this.firebaseAdmin.generateEmailVerificationLink(user.email);
     } catch (error) {
       this.logger.error(
         `Email verification failed: ${error.message}`,
         error.stack,
       );
-      throw new BadRequestException({
-        error: 'email_verification_failed',
-        message: 'Failed to send email verification link',
-      });
+      throw AppException.badRequest('bad_request', 'email_verification_failed');
     }
   }
 
-  // New method for changing password
   async changePassword(
     userId: string,
     oldPassword: string,
@@ -519,11 +467,7 @@ export class AuthService {
         `Password change failed: ${error.message}`,
         error.stack,
       );
-      throw new BadRequestException({
-        error: 'password_change_failed',
-        message:
-          'Failed to change password. Please ensure your current password is correct.',
-      });
+      throw AppException.badRequest('bad_request', 'password_change_failed');
     }
   }
 }

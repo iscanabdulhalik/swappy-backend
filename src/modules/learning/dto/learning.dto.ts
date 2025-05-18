@@ -35,9 +35,6 @@ export class CorrectionRequestDto {
 
 export class PronunciationRequestDto {
   @IsString()
-  audioUrl: string;
-
-  @IsString()
   text: string;
 
   @IsString()

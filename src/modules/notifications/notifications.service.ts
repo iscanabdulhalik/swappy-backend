@@ -1,160 +1,187 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
-import { PrismaService } from 'prisma/prisma.service';
+import { Injectable, Logger } from '@nestjs/common';
 import { NotificationGateway } from '../../websockets/notification.gateway';
 import { UpdateNotificationSettingsDto } from './dto/notification.dto';
+import { NotificationRepository } from './repositories/notification.repository';
+import { NotificationSettingsService } from './services/notification.service';
+import { ValidationHelper } from 'src/common/helpers/validation.helper';
+import { AppException } from 'src/common/exceptions/app-exceptions';
 
 @Injectable()
 export class NotificationsService {
+  private readonly logger = new Logger(NotificationsService.name);
+
   constructor(
-    private readonly prisma: PrismaService,
+    private readonly notificationRepository: NotificationRepository,
+    private readonly notificationSettingsService: NotificationSettingsService,
     private readonly notificationGateway: NotificationGateway,
+    private readonly validationHelper: ValidationHelper,
   ) {}
 
-  /**
-   * Get user's notifications
-   */
   async getNotifications(
     userId: string,
     limit = 20,
     offset = 0,
     unreadOnly = false,
   ) {
-    const where: any = {
-      userId,
-    };
+    try {
+      // Verify user exists
+      await this.validationHelper.validateUserExists(userId);
 
-    if (unreadOnly) {
-      where.isRead = false;
-    }
+      // Calculate page from offset/limit
+      const page = Math.floor(offset / limit) + 1;
 
-    const [notifications, total] = await Promise.all([
-      this.prisma.notification.findMany({
-        where,
-        include: {
-          actor: {
-            select: {
-              id: true,
-              displayName: true,
-              firstName: true,
-              lastName: true,
-              profileImageUrl: true,
-            },
-          },
-        },
-        take: limit,
-        skip: offset,
-        orderBy: { createdAt: 'desc' },
-      }),
-      this.prisma.notification.count({ where }),
-    ]);
-
-    // Update notification counter in real-time
-    const unreadCount = await this.prisma.notification.count({
-      where: {
+      // Get paginated notifications
+      const result = await this.notificationRepository.getUserNotifications(
         userId,
-        isRead: false,
-      },
-    });
+        unreadOnly,
+        page,
+        limit,
+      );
 
-    this.notificationGateway.updateNotificationCount(userId, unreadCount);
+      // Get unread count
+      const unreadCount =
+        await this.notificationRepository.getUnreadCount(userId);
 
-    return {
-      items: notifications,
-      total,
-      unreadCount,
-    };
+      // Update notification counter in real-time
+      this.notificationGateway.updateNotificationCount(userId, unreadCount);
+
+      return {
+        items: result.data,
+        total: result.total,
+        unreadCount,
+      };
+    } catch (error) {
+      if (error instanceof AppException) {
+        throw error;
+      }
+
+      this.logger.error(
+        `Error getting notifications: ${error.message}`,
+        error.stack,
+      );
+      throw AppException.internal('Error retrieving notifications');
+    }
   }
 
-  /**
-   * Mark notification as read
-   */
   async markNotificationAsRead(userId: string, notificationId: string) {
-    // Check if notification exists and belongs to user
-    const notification = await this.prisma.notification.findFirst({
-      where: {
-        id: notificationId,
-        userId,
-      },
-    });
+    try {
+      // Verify user exists
+      await this.validationHelper.validateUserExists(userId);
 
-    if (!notification) {
-      throw new NotFoundException({
-        error: 'notification_not_found',
-        message: 'Notification not found',
+      // Check if notification exists and belongs to user
+      const notification =
+        await this.notificationRepository.findById(notificationId);
+
+      if (!notification) {
+        throw AppException.notFound('not_found', 'Notification not found');
+      }
+
+      if (notification.userId !== userId) {
+        throw AppException.forbidden(
+          'You do not have permission to access this notification',
+        );
+      }
+
+      // Already read?
+      if (notification.isRead) {
+        return notification;
+      }
+
+      // Mark as read
+      const updated = await this.notificationRepository.update(notificationId, {
+        isRead: true,
       });
+
+      // Update notification counter in real-time
+      const unreadCount =
+        await this.notificationRepository.getUnreadCount(userId);
+      this.notificationGateway.updateNotificationCount(userId, unreadCount);
+
+      return updated;
+    } catch (error) {
+      if (error instanceof AppException) {
+        throw error;
+      }
+
+      this.logger.error(
+        `Error marking notification as read: ${error.message}`,
+        error.stack,
+      );
+      throw AppException.internal('Error updating notification');
     }
+  }
 
-    // Mark as read
-    const updated = await this.prisma.notification.update({
-      where: { id: notificationId },
-      data: { isRead: true },
-    });
+  async markAllNotificationsAsRead(userId: string) {
+    try {
+      // Verify user exists
+      await this.validationHelper.validateUserExists(userId);
 
-    // Update notification counter in real-time
-    const unreadCount = await this.prisma.notification.count({
-      where: {
-        userId,
-        isRead: false,
-      },
-    });
+      // Mark all as read
+      await this.notificationRepository.markAllAsRead(userId);
 
-    this.notificationGateway.updateNotificationCount(userId, unreadCount);
+      // Update notification counter in real-time
+      this.notificationGateway.updateNotificationCount(userId, 0);
 
-    return updated;
+      return { success: true };
+    } catch (error) {
+      if (error instanceof AppException) {
+        throw error;
+      }
+
+      this.logger.error(
+        `Error marking all notifications as read: ${error.message}`,
+        error.stack,
+      );
+      throw AppException.internal('Error updating notifications');
+    }
   }
 
   /**
-   * Mark all notifications as read
+   * Create a notification
    */
-  async markAllNotificationsAsRead(userId: string) {
-    // Mark all as read
-    await this.prisma.notification.updateMany({
-      where: {
-        userId,
-        isRead: false,
-      },
-      data: { isRead: true },
-    });
+  async createNotification(data: {
+    userId: string;
+    actorId?: string;
+    type: string;
+    message: string;
+    entityId?: string;
+    entityType?: string;
+  }) {
+    try {
+      // Create notification in database
+      const notification =
+        await this.notificationRepository.createNotification(data);
 
-    // Update notification counter in real-time
-    this.notificationGateway.updateNotificationCount(userId, 0);
+      // Send real-time notification
+      this.notificationGateway.sendNotification(data.userId, {
+        ...notification,
+        isNew: true,
+      });
 
-    return { success: true };
+      // Update unread count
+      const unreadCount = await this.notificationRepository.getUnreadCount(
+        data.userId,
+      );
+      this.notificationGateway.updateNotificationCount(
+        data.userId,
+        unreadCount,
+      );
+
+      return notification;
+    } catch (error) {
+      this.logger.error(
+        `Error creating notification: ${error.message}`,
+        error.stack,
+      );
+      // Don't rethrow - notification creation should not break the main flow
+    }
   }
 
   /**
    * Get notification settings
    */
   async getNotificationSettings(userId: string) {
-    // Get user settings
-    const userSettings = await this.prisma.userSettings.findUnique({
-      where: { userId },
-    });
-
-    if (!userSettings) {
-      throw new NotFoundException({
-        error: 'settings_not_found',
-        message: 'User settings not found',
-      });
-    }
-
-    // TODO: Implement actual notification preferences
-    // For now, return default settings
-    return {
-      emailEnabled: userSettings.emailNotifications,
-      pushEnabled: userSettings.pushNotifications,
-      preferences: {
-        NEW_MESSAGE: { email: true, push: true },
-        NEW_MATCH: { email: true, push: true },
-        MATCH_REQUEST: { email: true, push: true },
-        CORRECTION: { email: true, push: true },
-        MENTION: { email: true, push: true },
-        COMMENT: { email: true, push: true },
-        LIKE: { email: false, push: true },
-        FOLLOW: { email: false, push: true },
-        SYSTEM: { email: true, push: true },
-      },
-    };
+    return this.notificationSettingsService.getNotificationSettings(userId);
   }
 
   /**
@@ -162,53 +189,11 @@ export class NotificationsService {
    */
   async updateNotificationSettings(
     userId: string,
-    dto: UpdateNotificationSettingsDto,
+    updateSettingsDto: UpdateNotificationSettingsDto,
   ) {
-    // Get user settings
-    const userSettings = await this.prisma.userSettings.findUnique({
-      where: { userId },
-    });
-
-    if (!userSettings) {
-      throw new NotFoundException({
-        error: 'settings_not_found',
-        message: 'User settings not found',
-      });
-    }
-
-    // Update email and push settings
-    const data: any = {};
-
-    if (dto.emailEnabled !== undefined) {
-      data.emailNotifications = dto.emailEnabled;
-    }
-
-    if (dto.pushEnabled !== undefined) {
-      data.pushNotifications = dto.pushEnabled;
-    }
-
-    // Update user settings
-    await this.prisma.userSettings.update({
-      where: { id: userSettings.id },
-      data,
-    });
-
-    // TODO: Store notification preferences in a dedicated table
-    // For now, return updated settings
-    return {
-      emailEnabled: data.emailNotifications ?? userSettings.emailNotifications,
-      pushEnabled: data.pushNotifications ?? userSettings.pushNotifications,
-      preferences: dto.preferences || {
-        NEW_MESSAGE: { email: true, push: true },
-        NEW_MATCH: { email: true, push: true },
-        MATCH_REQUEST: { email: true, push: true },
-        CORRECTION: { email: true, push: true },
-        MENTION: { email: true, push: true },
-        COMMENT: { email: true, push: true },
-        LIKE: { email: false, push: true },
-        FOLLOW: { email: false, push: true },
-        SYSTEM: { email: true, push: true },
-      },
-    };
+    return this.notificationSettingsService.updateNotificationSettings(
+      userId,
+      updateSettingsDto,
+    );
   }
 }

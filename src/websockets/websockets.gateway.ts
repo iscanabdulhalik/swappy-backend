@@ -142,9 +142,6 @@ export class WebsocketsGateway
     }
   }
 
-  /**
-   * Get all sockets for a specific user
-   */
   getUserSockets(userId: string): Socket[] {
     const userClients = Array.from(this.clients.entries())
       .filter(([_, client]) => client.userId === userId)
@@ -154,17 +151,11 @@ export class WebsocketsGateway
     return userClients;
   }
 
-  /**
-   * Send event to a specific user across all their active connections
-   */
   sendToUser(userId: string, event: string, payload: any) {
     const sockets = this.getUserSockets(userId);
     sockets.forEach((socket) => socket.emit(event, payload));
   }
 
-  /**
-   * Send event to all users in a conversation
-   */
   sendToConversation(
     conversationId: string,
     event: string,
@@ -185,9 +176,6 @@ export class WebsocketsGateway
     }
   }
 
-  /**
-   * Add a socket to a conversation room
-   */
   addToConversation(socketId: string, conversationId: string) {
     const client = this.clients.get(socketId);
     if (client) {
@@ -205,9 +193,6 @@ export class WebsocketsGateway
     }
   }
 
-  /**
-   * Remove a socket from a conversation room
-   */
   removeFromConversation(socketId: string, conversationId: string) {
     const client = this.clients.get(socketId);
     if (client) {

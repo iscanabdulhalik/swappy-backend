@@ -310,21 +310,24 @@ export class ConversationsService {
 
     const result = { items: messages, total };
 
-    // Cache the result
     await this.cacheManager.set(cacheKey, result, CACHE_TTL.MESSAGES);
 
     return result;
   }
 
-  /**
-   * Create a new message with cache invalidation
-   */
   async createMessage(
     senderId: string,
     conversationId: string,
     messageDto: CreateMessageDto,
   ): Promise<Message> {
-    // Check conversation and permissions
+    if (!messageDto.content || messageDto.content.trim() === '') {
+      throw new BadRequestException({
+        error: 'invalid_content',
+        message: 'Message content cannot be empty',
+      });
+    }
+    const sanitizedContent = this.sanitizeContent(messageDto.content);
+
     const conversation = await this.prisma.conversation.findUnique({
       where: { id: conversationId },
       include: { participants: true },
@@ -380,7 +383,6 @@ export class ConversationsService {
 
       return newMessage;
     });
-
     // Invalidate caches
     await this.invalidateConversationCaches(conversationId);
     await this.invalidateMessageCaches(conversationId);
@@ -397,9 +399,14 @@ export class ConversationsService {
     return message;
   }
 
-  /**
-   * Create a media message with cache invalidation
-   */
+  private sanitizeContent(content: string): string {
+    return content
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#039;');
+  }
+
   async createMediaMessage(
     senderId: string,
     conversationId: string,

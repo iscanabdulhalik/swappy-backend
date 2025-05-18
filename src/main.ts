@@ -30,7 +30,7 @@ async function bootstrap() {
     }),
   );
 
-  // ✅ Swagger kurulumu
+  //Swagger kurulumu
   const config = new DocumentBuilder()
     .setTitle('API Dokümantasyonu')
     .setDescription('Projenin otomatik oluşturulan Swagger dökümantasyonu')

@@ -15,9 +15,13 @@ import {
   UpdateCommentDto,
   FeedQueryDto,
 } from './dto/post.dto';
+import { Logger } from '@nestjs/common';
+import { AppException } from 'src/common/exceptions/app-exceptions';
 
 @Injectable()
 export class PostsService {
+  private readonly logger = new Logger(PostsService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly notificationGateway: NotificationGateway,
@@ -32,108 +36,116 @@ export class PostsService {
     limit = 20,
     offset = 0,
   ) {
-    const { type, sort, languageId } = queryDto;
+    try {
+      const { type, sort, languageId } = queryDto;
 
-    // Base query to include user's own posts and public posts from others
-    let query: any = {
-      OR: [
-        { authorId: userId }, // User's own posts
-        { isPublic: true }, // Public posts
-      ],
-    };
+      // Base query to include user's own posts and public posts from others
+      let query: any = {
+        OR: [
+          { authorId: userId }, // User's own posts
+          { isPublic: true }, // Public posts
+        ],
+      };
 
-    // Add language filter if provided
-    if (languageId) {
-      query.languageId = languageId;
-    }
+      // Add language filter if provided
+      if (languageId) {
+        query.languageId = languageId;
+      }
 
-    // Filter by feed type
-    if (type === 'friends') {
-      // Get user's following IDs
-      const following = await this.prisma.follow.findMany({
-        where: { followerId: userId },
-        select: { followingId: true },
+      // Filter by feed type
+      if (type === 'friends') {
+        // Get user's following IDs
+        const following = await this.prisma.follow.findMany({
+          where: { followerId: userId },
+          select: { followingId: true },
+        });
+
+        const followingIds = following.map((f) => f.followingId);
+
+        // Show posts from followed users
+        query.OR = [
+          { authorId: userId }, // User's own posts
+          {
+            AND: [
+              { authorId: { in: followingIds } }, // Posts from followed users
+              { isPublic: true }, // That are public
+            ],
+          },
+        ];
+      }
+
+      // Get total count
+      const total = await this.prisma.post.count({ where: query });
+
+      // Define ordering based on sort parameter
+      let orderBy: any;
+
+      switch (sort) {
+        case 'popular':
+          orderBy = { likes: { _count: 'desc' } };
+          break;
+        case 'relevance':
+          // For relevance, we might need more complex logic
+          // For now, use recent as default
+          orderBy = { createdAt: 'desc' };
+          break;
+        case 'recent':
+        default:
+          orderBy = { createdAt: 'desc' };
+          break;
+      }
+
+      // Get posts in a single query with all necessary relations to prevent N+1
+      const posts = await this.prisma.post.findMany({
+        where: query,
+        include: {
+          author: {
+            select: {
+              id: true,
+              displayName: true,
+              firstName: true,
+              lastName: true,
+              profileImageUrl: true,
+            },
+          },
+          media: true,
+          language: true,
+          _count: {
+            select: {
+              likes: true,
+              comments: true,
+            },
+          },
+          likes: {
+            where: {
+              userId,
+            },
+            take: 1,
+          },
+        },
+        take: limit,
+        skip: offset,
+        orderBy,
       });
 
-      const followingIds = following.map((f) => f.followingId);
+      // Transform posts to include if the current user liked them
+      const transformedPosts = posts.map((post) => ({
+        ...post,
+        likedByMe: post.likes.length > 0,
+        likes: undefined, // Remove the likes array
+      }));
 
-      // Show posts from followed users
-      query.OR = [
-        { authorId: userId }, // User's own posts
-        {
-          AND: [
-            { authorId: { in: followingIds } }, // Posts from followed users
-            { isPublic: true }, // That are public
-          ],
-        },
-      ];
+      return {
+        items: transformedPosts,
+        total,
+      };
+    } catch (error) {
+      this.logger.error(`Error getting feed: ${error.message}`, error.stack);
+      if (error instanceof AppException) {
+        throw error;
+      }
+      throw AppException.internal('Error retrieving feed');
     }
-
-    // Get total count
-    const total = await this.prisma.post.count({ where: query });
-
-    // Define ordering based on sort parameter
-    let orderBy: any;
-
-    switch (sort) {
-      case 'popular':
-        orderBy = { likes: { _count: 'desc' } };
-        break;
-      case 'relevance':
-        // For relevance, we might need more complex logic
-        // For now, use recent as default
-        orderBy = { createdAt: 'desc' };
-        break;
-      case 'recent':
-      default:
-        orderBy = { createdAt: 'desc' };
-        break;
-    }
-
-    // Get posts
-    const posts = await this.prisma.post.findMany({
-      where: query,
-      include: {
-        author: {
-          select: {
-            id: true,
-            displayName: true,
-            firstName: true,
-            lastName: true,
-            profileImageUrl: true,
-          },
-        },
-        media: true,
-        language: true,
-        _count: {
-          select: {
-            likes: true,
-            comments: true,
-          },
-        },
-        likes: {
-          where: {
-            userId,
-          },
-          take: 1,
-        },
-      },
-      take: limit,
-      skip: offset,
-      orderBy,
-    });
-
-    // Transform posts to include if the current user liked them
-    const transformedPosts = posts.map((post) => ({
-      ...post,
-      likedByMe: post.likes.length > 0,
-      likes: undefined, // Remove the likes array
-    }));
-
-    return {
-      items: transformedPosts,
-      total,
-    };
   }
 
   /**

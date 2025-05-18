@@ -45,6 +45,10 @@ model User {
   languages              UserLanguage[]      @relation("UserLanguages")
   settings               UserSettings?
   stats                  UserStats?
+
+  @@index([countryCode])
+  @@index([displayName])
+  @@index([isActive])
 }
 
 model UserLanguage {
@@ -60,6 +64,8 @@ model UserLanguage {
   user       User          @relation("UserLanguages", fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, languageId])
+  @@index([isNative, languageId])
+  @@index([isLearning, languageId])
 }
 
 model UserSettings {
@@ -73,6 +79,8 @@ model UserSettings {
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
   user               User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  notificationPreferences   NotificationPreference[]
 }
 
 model UserStats {
@@ -180,6 +188,9 @@ model Message {
   conversation   Conversation        @relation(fields: [conversationId], references: [id], onDelete: Cascade)
   sender         User                @relation("MessageSender", fields: [senderId], references: [id], onDelete: Cascade)
   corrections    MessageCorrection[]
+
+  @@index([conversationId, createdAt(sort: Desc)])
+  @@index([senderId, createdAt(sort: Desc)])
 }
 
 model MessageCorrection {
@@ -207,6 +218,10 @@ model Post {
   language   Language?   @relation(fields: [languageId], references: [id])
   likes      PostLike[]
   media      PostMedia[]
+
+  @@index([authorId, createdAt(sort: Desc)])
+  @@index([languageId, createdAt(sort: Desc)])
+  @@index([isPublic, createdAt(sort: Desc)])
 }
 
 model PostMedia {
@@ -310,10 +325,39 @@ model Notification {
   createdAt  DateTime @default(now())
   actor      User?    @relation("NotificationActor", fields: [actorId], references: [id])
   user       User     @relation("UserNotifications", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, isRead, createdAt(sort: Desc)])
+  @@index([entityId, entityType])
+}
+
+model NotificationPreference {
+  id                 String           @id @default(uuid())
+  userSettingsId     String
+  type               NotificationType
+  emailEnabled       Boolean          @default(true)
+  pushEnabled        Boolean          @default(true)
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+  userSettings       UserSettings     @relation(fields: [userSettingsId], references: [id], onDelete: Cascade)
+
+  @@unique([userSettingsId, type])
+  @@index([userSettingsId])
 }
 
 enum LanguageLevel {
   BEGINNER
   INTERMEDIATE
   ADVANCED
+}
+
+enum NotificationType {
+  NEW_MESSAGE
+  NEW_MATCH
+  MATCH_REQUEST
+  CORRECTION
+  MENTION
+  COMMENT
+  LIKE
+  FOLLOW
+  SYSTEM
 }
