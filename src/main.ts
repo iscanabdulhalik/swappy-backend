@@ -22,7 +22,7 @@ async function bootstrap() {
   const configService = app.get(ConfigService);
 
   const port = configService.get<number>('PORT', 3003);
-  const apiPrefix = configService.get<string>('API_PREFIX', 'api');
+  const apiPrefix = configService.get<string>('API_PREFIX', 'v1');
   const corsOrigins = configService.get<string>('CORS_ORIGINS', '').split(',');
 
   // CORS ayarları
