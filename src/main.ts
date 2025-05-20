@@ -4,7 +4,6 @@ import { ConfigService } from '@nestjs/config';
 import { AppModule } from './app.module';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import { IoAdapter } from '@nestjs/platform-socket.io';
-import * as compression from 'compression';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 
@@ -22,7 +21,7 @@ async function bootstrap() {
 
   const configService = app.get(ConfigService);
 
-  const port = configService.get<number>('PORT', 3000);
+  const port = configService.get<number>('PORT', 3003);
   const apiPrefix = configService.get<string>('API_PREFIX', 'api');
   const corsOrigins = configService.get<string>('CORS_ORIGINS', '').split(',');
 
@@ -47,9 +46,6 @@ async function bootstrap() {
     // HTTP başlık güvenliği için Helmet
     app.use(helmet());
 
-    // Sıkıştırma için compression
-    app.use(compression());
-
     // DDoS koruması için rate limiter
     app.use(
       rateLimit({
@@ -73,7 +69,7 @@ async function bootstrap() {
   );
 
   // Ana rota
-  app.getHttpAdapter().get('/', (req, res) => {
+  app.getHttpAdapter().get('/v1', (req, res) => {
     res.send('API is running');
   });
 
@@ -94,11 +90,11 @@ async function bootstrap() {
   await app.listen(port);
 
   logger.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
-  logger.log(`Application is running on: http://localhost:${port}/`);
+  logger.log(`Application is running on: http://localhost:${port}/v1`);
 
   if (isDev) {
     logger.log(
-      `Swagger docs available at: http://localhost:${port}/${apiPrefix}/docs`,
+      `Swagger docs available at: http://localhost:${port}/${apiPrefix}/docs/v1`,
     );
   }
 }
