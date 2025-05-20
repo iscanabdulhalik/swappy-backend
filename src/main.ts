@@ -73,18 +73,15 @@ async function bootstrap() {
     res.send('API is running');
   });
 
-  // Swagger kurulumu (sadece development modunda)
-  if (isDev) {
-    const config = new DocumentBuilder()
-      .setTitle('API Dokümantasyonu')
-      .setDescription('Projenin otomatik oluşturulan Swagger dökümantasyonu')
-      .setVersion('1.0')
-      .addBearerAuth()
-      .build();
+  const config = new DocumentBuilder()
+    .setTitle('API Dokümantasyonu')
+    .setDescription('Projenin otomatik oluşturulan Swagger dökümantasyonu')
+    .setVersion('1.0')
+    .addBearerAuth()
+    .build();
 
-    const document = SwaggerModule.createDocument(app, config);
-    SwaggerModule.setup(`${apiPrefix}/docs`, app, document);
-  }
+  const document = SwaggerModule.createDocument(app, config);
+  SwaggerModule.setup(`${apiPrefix}/docs`, app, document);
 
   // Uygulamayı başlat
   await app.listen(port);
@@ -94,7 +91,7 @@ async function bootstrap() {
 
   if (isDev) {
     logger.log(
-      `Swagger docs available at: http://localhost:${port}/${apiPrefix}/docs/v1`,
+      `Swagger docs available at: http://localhost:${port}/${apiPrefix}/docs/`,
     );
   }
 }
