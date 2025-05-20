@@ -1,18 +1,32 @@
 import { NestFactory } from '@nestjs/core';
-import { ValidationPipe } from '@nestjs/common';
+import { ValidationPipe, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { AppModule } from './app.module';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import { IoAdapter } from '@nestjs/platform-socket.io';
+import * as compression from 'compression';
+import helmet from 'helmet';
+import rateLimit from 'express-rate-limit';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  const logger = new Logger('Bootstrap');
+  const isDev = process.env.NODE_ENV !== 'production';
+
+  // Uygulamayı oluştur
+  const app = await NestFactory.create(AppModule, {
+    logger: isDev
+      ? ['error', 'warn', 'log', 'debug', 'verbose']
+      : ['error', 'warn', 'log'],
+    cors: true,
+  });
+
   const configService = app.get(ConfigService);
 
   const port = configService.get<number>('PORT', 3000);
   const apiPrefix = configService.get<string>('API_PREFIX', 'api');
   const corsOrigins = configService.get<string>('CORS_ORIGINS', '').split(',');
 
+  // CORS ayarları
   app.enableCors({
     origin: corsOrigins.length ? corsOrigins : '*',
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
@@ -22,16 +36,31 @@ async function bootstrap() {
     maxAge: 86400, // 24 saat
   });
 
-  // WebSocket options uygulandığından emin olun (Socket.IO için)
+  // WebSocket options (Socket.IO için)
   app.useWebSocketAdapter(new IoAdapter(app));
 
+  // API prefix ayarı
   app.setGlobalPrefix(apiPrefix);
 
-  app.enableCors({
-    origin: corsOrigins,
-    credentials: true,
-  });
+  // Production için güvenlik önlemleri
+  if (process.env.NODE_ENV === 'production') {
+    // HTTP başlık güvenliği için Helmet
+    app.use(helmet());
 
+    // Sıkıştırma için compression
+    app.use(compression());
+
+    // DDoS koruması için rate limiter
+    app.use(
+      rateLimit({
+        windowMs: 15 * 60 * 1000, // 15 dakika
+        max: 100, // IP başına 15 dakikada 100 istek
+        message: 'İstek limiti aşıldı, lütfen daha sonra tekrar deneyin.',
+      }),
+    );
+  }
+
+  // Validasyon pipe
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,
@@ -43,24 +72,38 @@ async function bootstrap() {
     }),
   );
 
-  //Swagger kurulumu
-  const config = new DocumentBuilder()
-    .setTitle('API Dokümantasyonu')
-    .setDescription('Projenin otomatik oluşturulan Swagger dökümantasyonu')
-    .setVersion('1.0')
-    .addBearerAuth() // Eğer JWT ile yetkilendirme varsa
-    .build();
+  // Ana rota
+  app.getHttpAdapter().get('/', (req, res) => {
+    res.send('API is running');
+  });
 
-  const document = SwaggerModule.createDocument(app, config);
-  SwaggerModule.setup(`${apiPrefix}/docs`, app, document); // Örn: /api/docs
+  // Swagger kurulumu (sadece development modunda)
+  if (isDev) {
+    const config = new DocumentBuilder()
+      .setTitle('API Dokümantasyonu')
+      .setDescription('Projenin otomatik oluşturulan Swagger dökümantasyonu')
+      .setVersion('1.0')
+      .addBearerAuth()
+      .build();
 
+    const document = SwaggerModule.createDocument(app, config);
+    SwaggerModule.setup(`${apiPrefix}/docs`, app, document);
+  }
+
+  // Uygulamayı başlat
   await app.listen(port);
-  console.log(
-    `Application is running on: http://localhost:${port}/${apiPrefix}`,
-  );
-  console.log(
-    `Swagger docs available at: http://localhost:${port}/${apiPrefix}/docs`,
-  );
+
+  logger.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
+  logger.log(`Application is running on: http://localhost:${port}/`);
+
+  if (isDev) {
+    logger.log(
+      `Swagger docs available at: http://localhost:${port}/${apiPrefix}/docs`,
+    );
+  }
 }
 
-bootstrap();
+bootstrap().catch((err) => {
+  console.error('Application failed to start:', err);
+  process.exit(1);
+});
