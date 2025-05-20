@@ -3,6 +3,7 @@ import { ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { AppModule } from './app.module';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
+import { IoAdapter } from '@nestjs/platform-socket.io';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
@@ -11,6 +12,18 @@ async function bootstrap() {
   const port = configService.get<number>('PORT', 3000);
   const apiPrefix = configService.get<string>('API_PREFIX', 'api');
   const corsOrigins = configService.get<string>('CORS_ORIGINS', '').split(',');
+
+  app.enableCors({
+    origin: corsOrigins.length ? corsOrigins : '*',
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    credentials: true,
+    allowedHeaders:
+      'X-Requested-With, X-HTTP-Method-Override, Content-Type, Accept, Authorization',
+    maxAge: 86400, // 24 saat
+  });
+
+  // WebSocket options uygulandığından emin olun (Socket.IO için)
+  app.useWebSocketAdapter(new IoAdapter(app));
 
   app.setGlobalPrefix(apiPrefix);
 
