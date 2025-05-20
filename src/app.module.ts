@@ -4,7 +4,7 @@ import { APP_FILTER, APP_INTERCEPTOR } from '@nestjs/core';
 import { CacheModule } from '@nestjs/cache-manager';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 import { ResponseFormatterInterceptor } from './common/interceptors/response-formatter.interceptor';
-import { PrismaModule } from 'prisma/prisma.module';
+import { PrismaModule } from '../prisma/prisma.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { UsersModule } from './modules/users/user.module';
 import { MatchesModule } from './modules/matches/matches.module';
