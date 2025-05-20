@@ -20,6 +20,7 @@ import {
   UpdateUserSettingsDto,
 } from './dto/user.dto';
 import { LanguageService } from './services/language.service';
+import { AppException } from 'src/common/exceptions/app-exceptions';
 
 /**
  * Service responsible for managing user-related operations
@@ -457,108 +458,116 @@ export class UsersService {
     offset = 0,
   ): Promise<{ items: User[]; total: number }> {
     try {
-      // Verify user exists
       await this.getUserById(userId);
 
-      // Tek sorguda tüm veriyi çek (N+1 sorununu önlemek için)
-      const follows = await this.prisma.follow.findMany({
-        where: { followingId: userId },
-        include: {
-          follower: {
-            include: {
-              // Doğrudan tüm languages sorgula
-              languages: {
-                include: {
-                  language: true,
-                },
-              },
-            },
-          },
-        },
-        take: limit,
-        skip: offset,
-      });
-
-      // Toplam sayıyı ayrıca sor
       const total = await this.prisma.follow.count({
         where: { followingId: userId },
       });
 
-      // Her takipçi için native language'ları filtrele (veritabanı seviyesinde filtreleme yapmadık çünkü prefiltering yapmak çoklu ilişkilerde N+1 sorunu yaratır)
-      const followersWithNativeLanguages = follows.map((follow) => {
-        const follower = { ...follow.follower };
-        follower.languages = follower.languages.filter((lang) => lang.isNative);
-        return follower;
+      const followers = await this.prisma.user.findMany({
+        where: {
+          following: {
+            some: {
+              followingId: userId,
+            },
+          },
+        },
+        include: {
+          languages: {
+            where: {
+              isNative: true, // Veritabanı seviyesinde filtreleme
+            },
+            include: {
+              language: true,
+            },
+          },
+          stats: true, // İhtiyaç varsa stat bilgilerini de getir
+        },
+        take: limit,
+        skip: offset,
+        orderBy: {
+          displayName: 'asc',
+        },
       });
 
       return {
-        items: followersWithNativeLanguages,
+        items: followers,
         total,
       };
     } catch (error) {
       this.logger.error(
-        `Error getting user followers: ${error.message}`,
+        `Kullanıcı takipçilerini alırken hata: ${error.message}`,
         error.stack,
       );
-      throw error;
+      if (error instanceof AppException) {
+        throw error;
+      }
+      throw new AppException(
+        500,
+        'internal_error',
+        'Kullanıcı takipçileri alınamadı',
+      );
     }
   }
 
-  /**
-   * Get users followed by a user
-   */
   async getUserFollowing(
     userId: string,
     limit = 20,
     offset = 0,
   ): Promise<{ items: User[]; total: number }> {
     try {
-      // Verify user exists
+      // Kullanıcı var mı kontrol et
       await this.getUserById(userId);
 
-      // Tek sorguda tüm veriyi çek (N+1 sorununu önlemek için)
-      const follows = await this.prisma.follow.findMany({
-        where: { followerId: userId },
-        include: {
-          following: {
-            include: {
-              // Doğrudan tüm languages sorgula
-              languages: {
-                include: {
-                  language: true,
-                },
-              },
-            },
-          },
-        },
-        take: limit,
-        skip: offset,
-      });
-
-      // Toplam sayıyı ayrıca sor
+      // Toplam sayıyı öğren
       const total = await this.prisma.follow.count({
         where: { followerId: userId },
       });
 
-      // Her takipçi için native language'ları filtrele
-      const followingWithNativeLanguages = follows.map((follow) => {
-        const following = { ...follow.following };
-        following.languages = following.languages.filter(
-          (lang) => lang.isNative,
-        );
-        return following;
+      // Takip edilenleri al - N+1 sorununu önlemek için tek sorguda
+      const following = await this.prisma.user.findMany({
+        where: {
+          followers: {
+            some: {
+              followerId: userId,
+            },
+          },
+        },
+        include: {
+          languages: {
+            where: {
+              isNative: true, // Veritabanı seviyesinde filtreleme
+            },
+            include: {
+              language: true,
+            },
+          },
+          stats: true, // İhtiyaç varsa stat bilgilerini de getir
+        },
+        take: limit,
+        skip: offset,
+        orderBy: {
+          displayName: 'asc',
+        },
       });
 
       return {
-        items: followingWithNativeLanguages,
+        items: following,
         total,
       };
     } catch (error) {
       this.logger.error(
-        `Error getting user following: ${error.message}`,
+        `Kullanıcının takip ettiklerini alırken hata: ${error.message}`,
         error.stack,
       );
-      throw error;
+      if (error instanceof AppException) {
+        throw error;
+      }
+      throw new AppException(
+        500,
+        'internal_error',
+        'Kullanıcının takip ettikleri alınamadı',
+      );
     }
   }
 
@@ -588,7 +597,11 @@ export class UsersService {
         `Error getting user stats: ${error.message}`,
         error.stack,
       );
-      throw error;
+      throw new AppException(
+        500,
+        'internal_error',
+        'Kullanıcı istatistikleri alınamadı',
+      );
     }
   }
 

@@ -4,7 +4,6 @@ import {
   ConflictException,
   NotFoundException,
   UnauthorizedException,
-  InternalServerErrorException,
   Logger,
 } from '@nestjs/common';
 import { PrismaService } from 'prisma/prisma.service';
@@ -409,12 +408,26 @@ export class AuthService {
     const { email } = resetPasswordDto;
 
     try {
-      // This sends an email to the user with password reset link
-      await this.firebaseAdmin.generatePasswordResetLink(email);
+      // Kullanıcının var olup olmadığını kontrol et
+      try {
+        const userRecord = await this.firebaseAdmin
+          .getAuth()
+          .getUserByEmail(email);
+        this.logger.warn(`User exists: ${userRecord.email}`);
+      } catch (userError) {
+        this.logger.error(`User does not exist: ${email}`, userError.message);
+        // Geliştirme aşamasında gerçek hatayı görmek için:
+        throw new Error(`User check failed: ${userError.message}`);
+      }
+
+      // Password reset link oluştur
+      const resetLink =
+        await this.firebaseAdmin.generatePasswordResetLink(email);
+      this.logger.log(`Reset link generated: ${resetLink}`);
     } catch (error) {
       this.logger.error(`Password reset failed: ${error.message}`, error.stack);
-      // Don't reveal if the email exists for security reasons
-      throw AppException.badRequest('bad_request', 'password_reset_failed');
+      // Geliştirme aşamasında gerçek hatayı görmek için:
+      throw new Error(`Password reset failed: ${error.message}`);
     }
   }
 

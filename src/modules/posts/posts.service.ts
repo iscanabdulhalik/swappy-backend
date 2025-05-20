@@ -39,63 +39,66 @@ export class PostsService {
     try {
       const { type, sort, languageId } = queryDto;
 
-      // Base query to include user's own posts and public posts from others
-      let query: any = {
-        OR: [
-          { authorId: userId }, // User's own posts
-          { isPublic: true }, // Public posts
-        ],
-      };
-
-      // Add language filter if provided
-      if (languageId) {
-        query.languageId = languageId;
-      }
-
-      // Filter by feed type
+      // Takip edilen kullanıcıları tek seferde yükle
+      let followingIds: string[] = [];
       if (type === 'friends') {
-        // Get user's following IDs
         const following = await this.prisma.follow.findMany({
           where: { followerId: userId },
           select: { followingId: true },
         });
-
-        const followingIds = following.map((f) => f.followingId);
-
-        // Show posts from followed users
-        query.OR = [
-          { authorId: userId }, // User's own posts
-          {
-            AND: [
-              { authorId: { in: followingIds } }, // Posts from followed users
-              { isPublic: true }, // That are public
-            ],
-          },
-        ];
+        followingIds = following.map((f) => f.followingId);
       }
 
-      // Get total count
-      const total = await this.prisma.post.count({ where: query });
+      // Sorgu oluştur
+      let query: any = {};
 
-      // Define ordering based on sort parameter
+      switch (type) {
+        case 'friends':
+          query = {
+            OR: [
+              { authorId: userId }, // Kullanıcının kendi gönderileri
+              {
+                AND: [
+                  { authorId: { in: followingIds } }, // Takip edilen kullanıcıların gönderileri
+                  { isPublic: true }, // Herkese açık olan
+                ],
+              },
+            ],
+          };
+          break;
+        default:
+          // Varsayılan tip 'all'
+          query = {
+            OR: [
+              { authorId: userId }, // Kullanıcının kendi gönderileri
+              { isPublic: true }, // Herkese açık olan
+            ],
+          };
+      }
+
+      // Dil filtresi ekle
+      if (languageId) {
+        query.languageId = languageId;
+      }
+
+      // Sıralama tanımla
       let orderBy: any;
-
       switch (sort) {
         case 'popular':
           orderBy = { likes: { _count: 'desc' } };
           break;
         case 'relevance':
-          // For relevance, we might need more complex logic
-          // For now, use recent as default
-          orderBy = { createdAt: 'desc' };
+          orderBy = { createdAt: 'desc' }; // Şimdilik createdAt kullan
           break;
         case 'recent':
         default:
           orderBy = { createdAt: 'desc' };
-          break;
       }
 
-      // Get posts in a single query with all necessary relations to prevent N+1
+      // Toplam sayıyı öğren
+      const total = await this.prisma.post.count({ where: query });
+
+      // Tek sorguda tüm ilişkileri getir (N+1 sorununu önlemek için)
       const posts = await this.prisma.post.findMany({
         where: query,
         include: {
@@ -128,11 +131,11 @@ export class PostsService {
         orderBy,
       });
 
-      // Transform posts to include if the current user liked them
+      // Kullanıcı beğenilerini dönüştür
       const transformedPosts = posts.map((post) => ({
         ...post,
         likedByMe: post.likes.length > 0,
-        likes: undefined, // Remove the likes array
+        likes: undefined, // likes dizisini kaldır
       }));
 
       return {
@@ -140,11 +143,11 @@ export class PostsService {
         total,
       };
     } catch (error) {
-      this.logger.error(`Error getting feed: ${error.message}`, error.stack);
+      this.logger.error(`Feed getirme hatası: ${error.message}`, error.stack);
       if (error instanceof AppException) {
         throw error;
       }
-      throw AppException.internal('Error retrieving feed');
+      throw new AppException(500, 'internal_error', 'Feed getirilemedi');
     }
   }
 
