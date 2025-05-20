@@ -3,6 +3,7 @@ import { PrismaService } from 'prisma/prisma.service';
 import { BaseRepository } from '../../../common/repositories/base.repository';
 import { NotificationPreference, Prisma } from '@prisma/client';
 import { AppException } from 'src/common/exceptions/app-exceptions';
+import { $Enums } from '@prisma/client';
 
 @Injectable()
 export class NotificationPreferenceRepository extends BaseRepository<NotificationPreference> {
@@ -90,7 +91,7 @@ export class NotificationPreferenceRepository extends BaseRepository<Notificatio
 
       for (const [typeStr, settings] of Object.entries(preferences)) {
         try {
-          const type = typeStr as any; // NotificationType enum
+          const type = typeStr as $Enums.NotificationType; // NotificationType enum
 
           if (existingMap.has(type)) {
             // Update existing preference
@@ -181,7 +182,7 @@ export class NotificationPreferenceRepository extends BaseRepository<Notificatio
         this.prisma.notificationPreference.create({
           data: {
             userSettingsId,
-            type: pref.type as any, // NotificationType enum
+            type: pref.type as $Enums.NotificationType, // Prisma NotificationType enum
             emailEnabled: pref.emailEnabled,
             pushEnabled: pref.pushEnabled,
           },

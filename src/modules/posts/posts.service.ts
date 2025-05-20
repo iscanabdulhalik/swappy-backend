@@ -17,6 +17,7 @@ import {
 } from './dto/post.dto';
 import { Logger } from '@nestjs/common';
 import { AppException } from 'src/common/exceptions/app-exceptions';
+import { TransactionHelper } from 'src/common/helpers/transaction.helper';
 
 @Injectable()
 export class PostsService {
@@ -25,6 +26,7 @@ export class PostsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly notificationGateway: NotificationGateway,
+    private readonly transactionHelper: TransactionHelper,
   ) {}
 
   /**
@@ -151,44 +153,39 @@ export class PostsService {
     }
   }
 
-  /**
-   * Create a new post
-   */
   async createPost(authorId: string, createPostDto: CreatePostDto) {
-    // Create post
-    const post = await this.prisma.post.create({
-      data: {
-        authorId,
-        content: createPostDto.content,
-        languageId: createPostDto.languageId,
-        isPublic: createPostDto.isPublic ?? true,
-      },
-      include: {
-        author: {
-          select: {
-            id: true,
-            displayName: true,
-            firstName: true,
-            lastName: true,
-            profileImageUrl: true,
-          },
+    return this.transactionHelper.runInTransaction(async (tx) => {
+      const post = await tx.post.create({
+        data: {
+          authorId,
+          content: createPostDto.content,
+          languageId: createPostDto.languageId,
+          isPublic: createPostDto.isPublic ?? true,
         },
-        language: true,
-      },
-    });
+        include: {
+          author: {
+            select: {
+              id: true,
+              displayName: true,
+              firstName: true,
+              lastName: true,
+              profileImageUrl: true,
+            },
+          },
+          language: true,
+        },
+      });
 
-    // Update user stats
-    await this.prisma.userStats.update({
-      where: { userId: authorId },
-      data: { postsCount: { increment: 1 } },
-    });
+      // Update user stats
+      await tx.userStats.update({
+        where: { userId: authorId },
+        data: { postsCount: { increment: 1 } },
+      });
 
-    return post;
+      return post;
+    }, 'Gönderi oluşturulamadı');
   }
 
-  /**
-   * Add media to a post
-   */
   async addPostMedia(
     postId: string,
     userId: string,

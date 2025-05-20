@@ -16,7 +16,6 @@ async function bootstrap() {
     logger: isDev
       ? ['error', 'warn', 'log', 'debug', 'verbose']
       : ['error', 'warn', 'log'],
-    cors: true,
   });
 
   const configService = app.get(ConfigService);

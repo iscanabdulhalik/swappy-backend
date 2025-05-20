@@ -21,32 +21,6 @@ export class FirebaseAuthGuard implements CanActivate {
     const request = context.switchToHttp().getRequest();
     const authHeader = request.headers.authorization;
 
-    // TEST MODU GÜVENLIK AÇIĞI - BU KODU ÇIKARALIM
-    /* 
-    // Test modu için X-Test-User-ID header'ına izin ver
-    // DEV ortamında kullanılmalı, PROD ortamında bu kod çıkarılmalı
-    const testUserId = request.headers['x-test-user-id'];
-    if (process.env.NODE_ENV === 'development' && testUserId) {
-      try {
-        const user = await this.prismaService.user.findUnique({
-          where: { id: testUserId },
-        });
-
-        if (!user) {
-          throw new UnauthorizedException('Test user not found');
-        }
-
-        // Kullanıcıyı request'e ekle
-        request.user = user;
-        this.logger.log(`Test user authenticated: ${user.id}`);
-        return true;
-      } catch (error) {
-        this.logger.error(`Test auth error: ${error.message}`);
-        throw new UnauthorizedException('Invalid test user');
-      }
-    }
-    */
-
     if (!authHeader) {
       throw new UnauthorizedException('Authorization header is missing');
     }

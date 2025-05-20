@@ -408,26 +408,21 @@ export class AuthService {
     const { email } = resetPasswordDto;
 
     try {
-      // Kullanıcının var olup olmadığını kontrol et
-      try {
-        const userRecord = await this.firebaseAdmin
-          .getAuth()
-          .getUserByEmail(email);
-        this.logger.warn(`User exists: ${userRecord.email}`);
-      } catch (userError) {
-        this.logger.error(`User does not exist: ${email}`, userError.message);
-        // Geliştirme aşamasında gerçek hatayı görmek için:
-        throw new Error(`User check failed: ${userError.message}`);
-      }
-
-      // Password reset link oluştur
-      const resetLink =
-        await this.firebaseAdmin.generatePasswordResetLink(email);
-      this.logger.log(`Reset link generated: ${resetLink}`);
+      await this.firebaseAdmin.generatePasswordResetLink(email);
+      this.logger.log(
+        `Password reset link generation initiated for email: ${email}`,
+      );
     } catch (error) {
-      this.logger.error(`Password reset failed: ${error.message}`, error.stack);
-      // Geliştirme aşamasında gerçek hatayı görmek için:
-      throw new Error(`Password reset failed: ${error.message}`);
+      if (error.code === 'auth/user-not-found') {
+        this.logger.warn(
+          `Password reset attempt for non-existent user: ${email}`,
+        );
+      } else {
+        this.logger.error(
+          `Password reset link generation failed for email ${email}: ${error.message}`,
+          error.stack,
+        );
+      }
     }
   }
 

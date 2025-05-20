@@ -48,7 +48,7 @@ export class MatchesController {
     @Query() criteria: MatchCriteriaDto,
     @Query('limit') limit = 20,
     @Query('offset') offset = 0,
-    @Body() weights?: ScoringWeightsDto,
+    @Query() weights?: ScoringWeightsDto,
   ) {
     return this.matchesService.getMatchRecommendationsWithScoring(
       userId,
