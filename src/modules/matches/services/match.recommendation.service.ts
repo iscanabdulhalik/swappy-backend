@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { PrismaService } from 'prisma/prisma.service';
+import { PrismaService } from '../../../../prisma/prisma.service';
 import { MatchCriteriaDto, ScoringWeightsDto } from '../dto/match.dto';
 import { MatchScoringService } from './match-scoring.service';
 import {
@@ -242,7 +242,6 @@ export class MatchRecommendationService {
             language: true,
           },
         },
-        hobbies: true,
       },
       take: limit,
       skip: offset,

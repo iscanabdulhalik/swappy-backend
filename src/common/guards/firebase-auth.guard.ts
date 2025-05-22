@@ -5,8 +5,8 @@ import {
   UnauthorizedException,
   Logger,
 } from '@nestjs/common';
-import { FirebaseAdminService } from 'src/modules/auth/firebase/firebase-admin.service';
-import { PrismaService } from 'prisma/prisma.service';
+import { FirebaseAdminService } from '../../modules/auth/firebase/firebase-admin.service';
+import { PrismaService } from '../../../prisma/prisma.service';
 
 @Injectable()
 export class FirebaseAuthGuard implements CanActivate {

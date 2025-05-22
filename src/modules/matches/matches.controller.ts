@@ -59,6 +59,22 @@ export class MatchesController {
     );
   }
 
+  @Get('recommendations/top-non-friends')
+  async getTopRecommendedNonFriends(
+    @CurrentUser('id') userId: string,
+    @Query('limit') limit = 5,
+    @Query() weights?: ScoringWeightsDto, // ScoringWeightsDto'yu query'den alıyoruz
+  ) {
+    // Query'den gelen limit string olabilir, sayıya çevir
+    const numericLimit =
+      typeof limit === 'string' ? parseInt(limit, 10) : limit;
+    return this.matchesService.getTopRecommendedNonFriends(
+      userId,
+      numericLimit,
+      weights,
+    );
+  }
+
   @Post('request')
   async sendMatchRequest(
     @CurrentUser('id') userId: string,

@@ -1,10 +1,10 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { PrismaService } from 'prisma/prisma.service';
+import { PrismaService } from '../../../../prisma/prisma.service';
 import { Inject } from '@nestjs/common';
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import { Cache } from 'cache-manager';
 import { Language } from '@prisma/client';
-import { AppException } from 'src/common/exceptions/app-exceptions';
+import { AppException } from '../../../common/exceptions/app-exceptions';
 
 @Injectable()
 export class LanguageService {

@@ -5,7 +5,7 @@ import {
   ConflictException,
   Logger,
 } from '@nestjs/common';
-import { PrismaService } from 'prisma/prisma.service';
+import { PrismaService } from '../../../prisma/prisma.service';
 import {
   User,
   UserLanguage,
@@ -20,7 +20,7 @@ import {
   UpdateUserSettingsDto,
 } from './dto/user.dto';
 import { LanguageService } from './services/language.service';
-import { AppException } from 'src/common/exceptions/app-exceptions';
+import { AppException } from '../../common/exceptions/app-exceptions';
 
 /**
  * Service responsible for managing user-related operations

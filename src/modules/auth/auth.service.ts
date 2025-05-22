@@ -6,7 +6,7 @@ import {
   UnauthorizedException,
   Logger,
 } from '@nestjs/common';
-import { PrismaService } from 'prisma/prisma.service';
+import { PrismaService } from '../../../prisma/prisma.service';
 import { FirebaseAdminService } from './firebase/firebase-admin.service';
 import {
   RegisterDto,
@@ -16,7 +16,7 @@ import {
   ResetPasswordDto,
 } from './dto/auth.dto';
 import { User } from '@prisma/client';
-import { AppException } from 'src/common/exceptions/app-exceptions';
+import { AppException } from '../../common/exceptions/app-exceptions';
 
 @Injectable()
 export class AuthService {

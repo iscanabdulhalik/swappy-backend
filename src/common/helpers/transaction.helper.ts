@@ -1,6 +1,6 @@
 // src/common/helpers/transaction.helper.ts
 import { Injectable, Logger } from '@nestjs/common';
-import { PrismaService } from 'prisma/prisma.service';
+import { PrismaService } from '../../../prisma/prisma.service';
 import { AppException } from '../exceptions/app-exceptions';
 
 @Injectable()

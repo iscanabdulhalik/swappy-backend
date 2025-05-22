@@ -5,8 +5,8 @@ import {
   ForbiddenException,
   Inject,
 } from '@nestjs/common';
-import { PrismaService } from 'prisma/prisma.service';
-import { NotificationGateway } from 'src/websockets/notification.gateway';
+import { PrismaService } from '../../../prisma/prisma.service';
+import { NotificationGateway } from '../../websockets/notification.gateway';
 import { CACHE_MANAGER, Cache } from '@nestjs/cache-manager';
 import {
   Conversation,

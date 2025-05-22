@@ -5,11 +5,11 @@ import {
   ConflictException,
   Logger,
 } from '@nestjs/common';
-import { PrismaService } from 'prisma/prisma.service';
+import { PrismaService } from '../../../../prisma/prisma.service';
 import { MatchRequestDto } from '../dto/match.dto';
 import { Follow, Match, MatchRequest } from '@prisma/client';
-import { AppException } from 'src/common/exceptions/app-exceptions';
-import { TransactionHelper } from 'src/common/helpers/transaction.helper';
+import { AppException } from '../../../common/exceptions/app-exceptions';
+import { TransactionHelper } from '../../../common/helpers/transaction.helper';
 
 @Injectable()
 export class MatchRequestService {
