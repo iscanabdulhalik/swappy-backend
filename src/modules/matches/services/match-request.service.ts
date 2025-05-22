@@ -14,9 +14,76 @@ import { TransactionHelper } from 'src/common/helpers/transaction.helper';
 @Injectable()
 export class MatchRequestService {
   private readonly logger = new Logger(MatchRequestService.name);
-  transactionHelper: TransactionHelper;
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly transactionHelper: TransactionHelper,
+  ) {}
+
+  /**
+   * Create a conversation for a match
+   */
+  private async createConversationForMatch(
+    userIds: string[],
+    languageId: string,
+    matchId?: string,
+  ) {
+    try {
+      // Validation
+      if (userIds.length < 2) {
+        throw new BadRequestException({
+          error: 'invalid_participants',
+          message: 'Conversation must have at least 2 participants',
+        });
+      }
+
+      // Check language exists
+      const language = await this.prisma.language.findUnique({
+        where: { id: languageId },
+      });
+
+      if (!language) {
+        throw new NotFoundException({
+          error: 'language_not_found',
+          message: 'Language not found',
+        });
+      }
+
+      // Create conversation
+      const conversation = await this.prisma.conversation.create({
+        data: {
+          languageId,
+          participants: {
+            create: userIds.map((userId) => ({ userId })),
+          },
+        },
+        include: {
+          language: true,
+          participants: {
+            include: {
+              user: {
+                select: {
+                  id: true,
+                  displayName: true,
+                  firstName: true,
+                  lastName: true,
+                  profileImageUrl: true,
+                },
+              },
+            },
+          },
+        },
+      });
+
+      return conversation;
+    } catch (error) {
+      this.logger.error(
+        `Error creating conversation: ${error.message}`,
+        error.stack,
+      );
+      throw error;
+    }
+  }
 
   /**
    * Send a match request
@@ -219,34 +286,104 @@ export class MatchRequestService {
       }
 
       // Transaction içinde işlemleri gerçekleştir
-      return this.transactionHelper.runInTransaction(async (tx) => {
-        // İstek durumunu güncelle
-        await tx.matchRequest.update({
-          where: { id: requestId },
-          data: { status: 'accepted' },
-        });
+      const match = await this.transactionHelper.runInTransaction(
+        async (tx) => {
+          // İstek durumunu güncelle
+          await tx.matchRequest.update({
+            where: { id: requestId },
+            data: { status: 'accepted' },
+          });
 
-        // Eşleşme oluştur
-        const match = await tx.match.create({
-          data: {
-            initiatorId: request.senderId,
-            receiverId,
-          },
-        });
+          // Eşleşme oluştur
+          const match = await tx.match.create({
+            data: {
+              initiatorId: request.senderId,
+              receiverId,
+            },
+          });
 
-        // Kullanıcı istatistiklerini güncelle
-        await tx.userStats.update({
-          where: { userId: request.senderId },
-          data: { matchesCount: { increment: 1 } },
-        });
+          // Kullanıcı istatistiklerini güncelle
+          await tx.userStats.update({
+            where: { userId: request.senderId },
+            data: { matchesCount: { increment: 1 } },
+          });
 
-        await tx.userStats.update({
-          where: { userId: receiverId },
-          data: { matchesCount: { increment: 1 } },
-        });
+          await tx.userStats.update({
+            where: { userId: receiverId },
+            data: { matchesCount: { increment: 1 } },
+          });
 
-        return match;
-      }, 'Eşleşme isteği kabul edilemedi');
+          return match;
+        },
+        'Eşleşme isteği kabul edilemedi',
+      );
+
+      // Transaction dışında conversation oluştur
+      try {
+        // Kullanıcıların dil tercihlerini belirle
+        const [senderLanguages, receiverLanguages] = await Promise.all([
+          this.prisma.userLanguage.findMany({
+            where: { userId: request.senderId, isLearning: true },
+            include: { language: true },
+          }),
+          this.prisma.userLanguage.findMany({
+            where: { userId: receiverId, isNative: true },
+            include: { language: true },
+          }),
+        ]);
+
+        // Ortak dil bul (gönderen öğreniyor, alıcı anadil olarak biliyor)
+        let conversationLanguageId: string | undefined = undefined;
+        for (const senderLang of senderLanguages) {
+          const matchingLang = receiverLanguages.find(
+            (receiverLang) => receiverLang.languageId === senderLang.languageId,
+          );
+          if (matchingLang) {
+            conversationLanguageId = senderLang.languageId;
+            break;
+          }
+        }
+
+        // Eğer ortak dil bulunamazsa, İngilizce'yi varsayılan olarak kullan
+        if (!conversationLanguageId) {
+          const englishLanguage = await this.prisma.language.findFirst({
+            where: { code: 'en' },
+          });
+          conversationLanguageId = englishLanguage?.id;
+
+          // Eğer İngilizce de bulunamazsa, gönderenin öğrendiği ilk dili kullan
+          if (!conversationLanguageId && senderLanguages.length > 0) {
+            conversationLanguageId = senderLanguages[0].languageId;
+          }
+        }
+
+        // Conversation oluştur
+        if (conversationLanguageId) {
+          const conversation = await this.createConversationForMatch(
+            [request.senderId, receiverId],
+            conversationLanguageId,
+            match.id,
+          );
+
+          // Match'i conversation ile ilişkilendir
+          await this.prisma.match.update({
+            where: { id: match.id },
+            data: { conversationId: conversation.id },
+          });
+
+          this.logger.log(
+            `Conversation created for match ${match.id}: ${conversation.id}`,
+          );
+        }
+      } catch (conversationError) {
+        this.logger.error(
+          `Conversation oluşturulamadı: ${conversationError.message}`,
+          conversationError.stack,
+        );
+        // Conversation hata verirse match'i silme, sadece log at
+      }
+
+      return match;
     } catch (error) {
       this.logger.error(
         `Eşleşme isteği kabul hatası: ${error.message}`,

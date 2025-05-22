@@ -8,6 +8,7 @@ import { MatchScoringService } from './services/match-scoring.service';
 import { MatchRecommendationService } from './services/match.recommendation.service';
 import { MatchRequestService } from './services/match-request.service';
 import { MatchManagementService } from './services/match-management.service';
+import { TransactionHelper } from '../../common/helpers/transaction.helper';
 
 @Module({
   imports: [PrismaModule, AuthModule, UsersModule],
@@ -17,6 +18,7 @@ import { MatchManagementService } from './services/match-management.service';
     MatchRecommendationService,
     MatchRequestService,
     MatchManagementService,
+    TransactionHelper,
   ],
   controllers: [MatchesController],
   exports: [MatchesService],
