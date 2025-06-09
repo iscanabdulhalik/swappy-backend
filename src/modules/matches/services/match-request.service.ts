@@ -127,6 +127,9 @@ export class MatchRequestService {
       });
 
       if (existingMatch) {
+        this.logger.warn(
+          `Match request blocked: Match already exists between users ${senderId} and ${receiverId}`,
+        );
         throw new ConflictException({
           error: 'match_exists',
           message: 'A match already exists between these users',
@@ -144,6 +147,9 @@ export class MatchRequestService {
       });
 
       if (existingRequest) {
+        this.logger.warn(
+          `Match request blocked: Request already exists from ${senderId} to ${receiverId}`,
+        );
         throw new ConflictException({
           error: 'request_exists',
           message: 'A match request already exists',
@@ -161,7 +167,11 @@ export class MatchRequestService {
       });
 
       // If there's a pending request in the opposite direction, auto-accept and create a match
-      if (pendingRequest) {
+      if (pendingRequest && pendingRequest.status === 'pending') {
+        this.logger.log(
+          `Auto-accepting mutual match request between ${senderId} and ${receiverId}`,
+        );
+
         await this.prisma.matchRequest.update({
           where: { id: pendingRequest.id },
           data: { status: 'accepted' },
@@ -181,18 +191,30 @@ export class MatchRequestService {
       }
 
       // Create the match request
-      return this.prisma.matchRequest.create({
+      const newRequest = await this.prisma.matchRequest.create({
         data: {
           senderId,
           receiverId,
           message,
         },
       });
-    } catch (error) {
-      this.logger.error(
-        `Error sending match request: ${error.message}`,
-        error.stack,
+
+      this.logger.log(
+        `Match request created: ${newRequest.id} from ${senderId} to ${receiverId}`,
       );
+      return newRequest;
+    } catch (error) {
+      // Sadece beklenmedik hatalar için ERROR seviyesinde log at
+      if (
+        !(error instanceof ConflictException) &&
+        !(error instanceof BadRequestException) &&
+        !(error instanceof NotFoundException)
+      ) {
+        this.logger.error(
+          `Unexpected error sending match request: ${error.message}`,
+          error.stack,
+        );
+      }
       throw error;
     }
   }

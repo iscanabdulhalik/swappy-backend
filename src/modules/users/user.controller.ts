@@ -142,4 +142,12 @@ export class UsersController {
   ): Promise<UserStats> {
     return this.usersService.getUserStats(userId);
   }
+
+  @Get(':id/hobbies')
+  @UseGuards(FirebaseAuthGuard)
+  async getUserHobbies(
+    @Param('id', ParseUUIDPipe) userId: string,
+  ): Promise<string[]> {
+    return this.usersService.getUserHobbies(userId);
+  }
 }

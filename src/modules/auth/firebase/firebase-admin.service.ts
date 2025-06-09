@@ -75,6 +75,10 @@ export class FirebaseAdminService implements OnModuleInit {
     return this.getAuth().getUser(uid);
   }
 
+  async getUserByEmail(email: string): Promise<admin.auth.UserRecord> {
+    return this.getAuth().getUserByEmail(email);
+  }
+
   async createUser(
     email: string,
     password: string,

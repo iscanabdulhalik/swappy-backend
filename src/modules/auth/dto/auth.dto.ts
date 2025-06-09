@@ -5,6 +5,9 @@ import {
   IsOptional,
   MinLength,
   IsNotEmpty,
+  IsDateString,
+  IsArray,
+  IsEnum,
 } from 'class-validator';
 
 export class RegisterDto {
@@ -39,10 +42,46 @@ export class RegisterDto {
   @IsOptional()
   countryCode?: string;
 
-  @ApiPropertyOptional({ example: 'user' })
+  @ApiPropertyOptional({
+    example: 'user',
+    enum: ['user', 'admin', 'moderator'],
+  })
   @IsString()
   @IsOptional()
   role?: string;
+
+  @ApiPropertyOptional({
+    example: ['reading', 'coding', 'gaming'],
+    description: 'User hobbies array',
+  })
+  @IsArray()
+  @IsString({ each: true })
+  @IsOptional()
+  hobbies?: string[];
+
+  @ApiPropertyOptional({
+    example: '1990-01-15T00:00:00.000Z',
+    description: 'Birth date in ISO 8601 format',
+  })
+  @IsOptional()
+  @IsDateString()
+  birthDate?: string;
+
+  @ApiPropertyOptional({
+    example: 'https://example.com/profile.jpg',
+    description: 'Profile image URL',
+  })
+  @IsString()
+  @IsOptional()
+  profileImageUrl?: string;
+
+  @ApiPropertyOptional({
+    example: 'This is a sample bio.',
+    description: 'User biography',
+  })
+  @IsString()
+  @IsOptional()
+  bio?: string;
 }
 
 export class LoginDto {
@@ -58,61 +97,87 @@ export class LoginDto {
 }
 
 export class FirebaseAuthDto {
-  @ApiProperty()
+  @ApiProperty({
+    description: 'Firebase ID token',
+    example: 'eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9...',
+  })
   @IsString()
   @IsNotEmpty()
   idToken: string;
 }
 
 export class GoogleAuthDto {
-  @ApiProperty()
+  @ApiProperty({
+    description: 'Google ID token from Firebase Auth',
+    example: 'eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9...',
+  })
   @IsString()
   @IsNotEmpty()
   idToken: string;
 }
 
 export class RefreshTokenDto {
-  @ApiProperty()
+  @ApiProperty({
+    description: 'Refresh token for getting new access token',
+    example: 'refresh_token_string_here',
+  })
   @IsString()
   @IsNotEmpty()
   refreshToken: string;
 }
 
 export class UpdateProfileDto {
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({ example: 'user@example.com' })
   @IsEmail()
   @IsOptional()
   email?: string;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({ example: 'John Doe' })
   @IsString()
   @IsOptional()
   displayName?: string;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({ example: 'John' })
   @IsString()
   @IsOptional()
   firstName?: string;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({ example: 'Doe' })
   @IsString()
   @IsOptional()
   lastName?: string;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({ example: 'This is my updated bio.' })
   @IsString()
   @IsOptional()
   bio?: string;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({ example: 'https://example.com/new-profile.jpg' })
   @IsString()
   @IsOptional()
   profileImageUrl?: string;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({ example: 'US' })
   @IsString()
   @IsOptional()
   countryCode?: string;
+
+  @ApiPropertyOptional({
+    example: ['photography', 'travel', 'music'],
+    description: 'Updated hobbies array',
+  })
+  @IsArray()
+  @IsString({ each: true })
+  @IsOptional()
+  hobbies?: string[];
+
+  @ApiPropertyOptional({
+    example: '1990-01-15T00:00:00.000Z',
+    description: 'Birth date in ISO 8601 format',
+  })
+  @IsOptional()
+  @IsDateString()
+  birthDate?: string;
 }
 
 export class ResetPasswordDto {

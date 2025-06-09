@@ -1,11 +1,4 @@
-import {
-  Injectable,
-  BadRequestException,
-  ConflictException,
-  NotFoundException,
-  UnauthorizedException,
-  Logger,
-} from '@nestjs/common';
+import { Injectable, ConflictException, Logger } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { FirebaseAdminService } from './firebase/firebase-admin.service';
 import {
@@ -28,6 +21,7 @@ export class AuthService {
   ) {}
 
   async register(registerDto: RegisterDto): Promise<User> {
+    // Check if user already exists
     const existingUser = await this.prisma.user.findUnique({
       where: { email: registerDto.email },
     });
@@ -39,21 +33,34 @@ export class AuthService {
       });
     }
 
+    let firebaseUser: any = null;
+
     try {
-      const firebaseUser = await this.firebaseAdmin.createUser(
+      // Create Firebase user first
+      firebaseUser = await this.firebaseAdmin.createUser(
         registerDto.email,
         registerDto.password,
       );
 
+      // Prepare data for database
+      const birthDate = registerDto.birthDate
+        ? new Date(registerDto.birthDate)
+        : null;
+
+      // Create user in database
       const newUser = await this.prisma.user.create({
         data: {
           email: registerDto.email,
           firebaseUid: firebaseUser.uid,
           role: registerDto.role || 'user',
-          displayName: registerDto.displayName,
-          firstName: registerDto.firstName,
-          lastName: registerDto.lastName,
-          countryCode: registerDto.countryCode,
+          hobbies: registerDto.hobbies || [],
+          birthDate,
+          displayName: registerDto.displayName || null,
+          firstName: registerDto.firstName || null,
+          lastName: registerDto.lastName || null,
+          bio: registerDto.bio || null,
+          profileImageUrl: registerDto.profileImageUrl || null,
+          countryCode: registerDto.countryCode || null,
           settings: {
             create: {},
           },
@@ -67,21 +74,56 @@ export class AuthService {
         },
       });
 
+      this.logger.log(`User registered successfully: ${newUser.id}`);
       return newUser;
     } catch (error) {
       this.logger.error(`Registration failed: ${error.message}`, error.stack);
-      throw AppException.badRequest('bad_request', 'authentication_failed');
+
+      // Cleanup Firebase user if database creation failed
+      if (firebaseUser?.uid) {
+        try {
+          await this.firebaseAdmin.deleteUser(firebaseUser.uid);
+          this.logger.log(`Cleaned up Firebase user: ${firebaseUser.uid}`);
+        } catch (cleanupError) {
+          this.logger.error(
+            `Failed to cleanup Firebase user: ${cleanupError.message}`,
+          );
+        }
+      }
+
+      if (error.code === 'auth/email-already-exists') {
+        throw AppException.conflict(
+          'user_already_exists',
+          'Email already registered',
+        );
+      }
+
+      if (error.code === 'auth/weak-password') {
+        throw AppException.badRequest('bad_request', 'Password is too weak');
+      }
+
+      if (error.code === 'P2002' && error.meta?.target?.includes('email')) {
+        throw AppException.conflict(
+          'user_already_exists',
+          'Email already exists',
+        );
+      }
+
+      throw AppException.badRequest('bad_request', 'Registration failed');
     }
   }
 
-  async login(loginDto: LoginDto): Promise<{ user: User; idToken: string }> {
+  async login(
+    loginDto: LoginDto,
+  ): Promise<{ userId: string; idToken: string; user: User }> {
     try {
-      // Sign in with Firebase
+      // Authenticate with Firebase
       const firebaseAuth = await this.firebaseAdmin.signInWithEmailPassword(
         loginDto.email,
         loginDto.password,
       );
 
+      // Get user from database
       const user = await this.prisma.user.findUnique({
         where: { email: loginDto.email },
         include: {
@@ -91,33 +133,58 @@ export class AuthService {
       });
 
       if (!user) {
-        throw new NotFoundException({
-          error: 'user_not_found',
-          message: 'User not found in database',
-        });
+        throw AppException.notFound('user_not_found', 'User not found');
       }
 
+      // Update last active date
       await this.prisma.userStats.update({
         where: { userId: user.id },
         data: { lastActiveDate: new Date() },
       });
 
+      this.logger.log(`User logged in successfully: ${user.id}`);
+
       return {
-        user,
+        userId: user.id,
         idToken: firebaseAuth.idToken,
+        user,
       };
     } catch (error) {
-      this.logger.error(`Authentication failed: ${error.message}`, error.stack);
-      throw AppException.unauthorized('authentication_failed');
+      this.logger.error(`Login failed: ${error.message}`);
+
+      if (error instanceof AppException) {
+        throw error;
+      }
+
+      if (
+        error.code === 'auth/user-not-found' ||
+        error.code === 'auth/wrong-password'
+      ) {
+        throw AppException.badRequest(
+          'invalid_credentials',
+          'Invalid email or password',
+        );
+      }
+
+      if (error.code === 'auth/too-many-requests') {
+        throw AppException.badRequest(
+          'bad_request',
+          'Too many failed attempts. Please try again later',
+        );
+      }
+
+      throw AppException.unauthorized('Authentication failed');
     }
   }
 
   async authenticateWithFirebase(authDto: FirebaseAuthDto): Promise<User> {
     try {
+      // Verify Firebase token
       const decodedToken = await this.firebaseAdmin.verifyIdToken(
         authDto.idToken,
       );
 
+      // Find user by Firebase UID
       let user = await this.prisma.user.findUnique({
         where: { firebaseUid: decodedToken.uid },
         include: {
@@ -127,14 +194,17 @@ export class AuthService {
       });
 
       if (!user) {
+        // Get Firebase user details
         const firebaseUser = await this.firebaseAdmin.getUser(decodedToken.uid);
 
         if (firebaseUser.email) {
+          // Check if user exists with same email
           const existingUser = await this.prisma.user.findUnique({
             where: { email: firebaseUser.email },
           });
 
           if (existingUser) {
+            // Link existing user to Firebase UID
             user = await this.prisma.user.update({
               where: { id: existingUser.id },
               data: { firebaseUid: firebaseUser.uid },
@@ -143,33 +213,36 @@ export class AuthService {
                 stats: true,
               },
             });
-            return user;
           }
         }
 
-        return this.prisma.user.create({
-          data: {
-            email: firebaseUser.email || `${firebaseUser.uid}@unknown.com`,
-            firebaseUid: firebaseUser.uid,
-            displayName:
-              firebaseUser.displayName ||
-              firebaseUser.email?.split('@')[0] ||
-              'User',
-            profileImageUrl: firebaseUser.photoURL,
-            settings: {
-              create: {},
+        // Create new user if still not found
+        if (!user) {
+          user = await this.prisma.user.create({
+            data: {
+              email: firebaseUser.email || `${firebaseUser.uid}@firebase.local`,
+              firebaseUid: firebaseUser.uid,
+              displayName:
+                firebaseUser.displayName ||
+                firebaseUser.email?.split('@')[0] ||
+                'User',
+              profileImageUrl: firebaseUser.photoURL || null,
+              settings: {
+                create: {},
+              },
+              stats: {
+                create: {},
+              },
             },
-            stats: {
-              create: {},
+            include: {
+              settings: true,
+              stats: true,
             },
-          },
-          include: {
-            settings: true,
-            stats: true,
-          },
-        });
+          });
+        }
       }
 
+      // Update last active date
       await this.prisma.userStats.update({
         where: { userId: user.id },
         data: { lastActiveDate: new Date() },
@@ -177,11 +250,106 @@ export class AuthService {
 
       return user;
     } catch (error) {
-      this.logger.error(
-        `Firebase authentication failed: ${error.message}`,
-        error.stack,
-      );
-      throw AppException.unauthorized('firebase_auth_failed');
+      this.logger.error(`Firebase authentication failed: ${error.message}`);
+
+      if (error.code === 'auth/id-token-expired') {
+        throw AppException.unauthorized('Token expired');
+      }
+
+      if (error.code === 'auth/id-token-revoked') {
+        throw AppException.unauthorized('Token revoked');
+      }
+
+      throw AppException.unauthorized('Firebase authentication failed');
+    }
+  }
+
+  async authenticateWithGoogle(idToken: string): Promise<User> {
+    try {
+      // Verify Google token
+      const decodedToken = await this.firebaseAdmin.verifyIdToken(idToken);
+
+      if (!decodedToken.email) {
+        throw AppException.badRequest(
+          'bad_request',
+          'Google account missing email',
+        );
+      }
+
+      // Find user by Firebase UID
+      let user = await this.prisma.user.findUnique({
+        where: { firebaseUid: decodedToken.uid },
+        include: {
+          settings: true,
+          stats: true,
+        },
+      });
+
+      if (!user) {
+        // Check if user exists with same email
+        user = await this.prisma.user.findUnique({
+          where: { email: decodedToken.email },
+          include: {
+            settings: true,
+            stats: true,
+          },
+        });
+
+        if (user) {
+          // Link existing user to Google
+          user = await this.prisma.user.update({
+            where: { id: user.id },
+            data: { firebaseUid: decodedToken.uid },
+            include: {
+              settings: true,
+              stats: true,
+            },
+          });
+        } else {
+          // Create new user from Google
+          const firebaseUser = await this.firebaseAdmin.getUser(
+            decodedToken.uid,
+          );
+
+          user = await this.prisma.user.create({
+            data: {
+              email: decodedToken.email,
+              firebaseUid: firebaseUser.uid,
+              displayName:
+                firebaseUser.displayName ||
+                decodedToken.email.split('@')[0] ||
+                'User',
+              profileImageUrl: firebaseUser.photoURL || null,
+              settings: {
+                create: {},
+              },
+              stats: {
+                create: {},
+              },
+            },
+            include: {
+              settings: true,
+              stats: true,
+            },
+          });
+        }
+      }
+
+      // Update last active date
+      await this.prisma.userStats.update({
+        where: { userId: user.id },
+        data: { lastActiveDate: new Date() },
+      });
+
+      return user;
+    } catch (error) {
+      this.logger.error(`Google authentication failed: ${error.message}`);
+
+      if (error instanceof AppException) {
+        throw error;
+      }
+
+      throw AppException.unauthorized('Google authentication failed');
     }
   }
 
@@ -189,28 +357,25 @@ export class AuthService {
     try {
       const user = await this.prisma.user.findUnique({
         where: { id: userId },
+        select: { id: true, firebaseUid: true },
       });
 
-      if (!user || !user.firebaseUid) {
-        throw new NotFoundException({
-          error: 'user_not_found',
-          message: 'User not found or missing Firebase UID',
-        });
+      if (!user?.firebaseUid) {
+        throw AppException.notFound('user_not_found', 'User not found');
       }
 
-      // Create custom token from Firebase
-      // This token should be exchanged for an ID token on the client side
       const customToken = await this.firebaseAdmin.createCustomToken(
         user.firebaseUid,
       );
-
       return customToken;
     } catch (error) {
-      this.logger.error(`Token refresh failed: ${error.message}`, error.stack);
-      throw new UnauthorizedException({
-        error: 'token_refresh_failed',
-        message: 'Failed to refresh authentication token',
-      });
+      this.logger.error(`Token refresh failed: ${error.message}`);
+
+      if (error instanceof AppException) {
+        throw error;
+      }
+
+      throw AppException.unauthorized('Token refresh failed');
     }
   }
 
@@ -229,10 +394,7 @@ export class AuthService {
     });
 
     if (!user) {
-      throw new NotFoundException({
-        error: 'user_not_found',
-        message: 'User not found',
-      });
+      throw AppException.notFound('user_not_found', 'User not found');
     }
 
     return user;
@@ -248,119 +410,10 @@ export class AuthService {
     });
 
     if (!user) {
-      throw new NotFoundException({
-        error: 'user_not_found',
-        message: 'User not found',
-      });
+      throw AppException.notFound('user_not_found', 'User not found');
     }
 
     return user;
-  }
-
-  async deleteUser(id: string): Promise<void> {
-    const user = await this.prisma.user.findUnique({
-      where: { id },
-    });
-
-    if (!user) {
-      throw new NotFoundException({
-        error: 'user_not_found',
-        message: 'User not found',
-      });
-    }
-
-    try {
-      await this.firebaseAdmin.deleteUser(user.firebaseUid);
-
-      await this.prisma.user.delete({
-        where: { id },
-      });
-    } catch (error) {
-      this.logger.error(`User deletion failed: ${error.message}`, error.stack);
-      throw AppException.internal('User deletion failed');
-    }
-  }
-
-  async authenticateWithGoogle(idToken: string): Promise<User> {
-    try {
-      const decodedToken = await this.firebaseAdmin.verifyIdToken(idToken);
-
-      if (!decodedToken.email) {
-        throw new BadRequestException({
-          error: 'invalid_account',
-          message: "Google account doesn't have a valid email",
-        });
-      }
-
-      let user = await this.prisma.user.findUnique({
-        where: { firebaseUid: decodedToken.uid },
-        include: {
-          settings: true,
-          stats: true,
-        },
-      });
-
-      if (!user && decodedToken.email) {
-        user = await this.prisma.user.findUnique({
-          where: { email: decodedToken.email },
-          include: {
-            settings: true,
-            stats: true,
-          },
-        });
-
-        if (user) {
-          user = await this.prisma.user.update({
-            where: { id: user.id },
-            data: { firebaseUid: decodedToken.uid },
-            include: {
-              settings: true,
-              stats: true,
-            },
-          });
-        }
-      }
-
-      if (!user) {
-        const firebaseUser = await this.firebaseAdmin.getUser(decodedToken.uid);
-
-        const email = firebaseUser.email;
-        if (!email) {
-          throw new BadRequestException({
-            error: 'invalid_account',
-            message: "Google account doesn't have a valid email",
-          });
-        }
-
-        user = await this.prisma.user.create({
-          data: {
-            email: email,
-            firebaseUid: firebaseUser.uid,
-            displayName:
-              firebaseUser.displayName || email.split('@')[0] || 'User',
-            profileImageUrl: firebaseUser.photoURL,
-            settings: {
-              create: {},
-            },
-            stats: {
-              create: {},
-            },
-          },
-          include: {
-            settings: true,
-            stats: true,
-          },
-        });
-      }
-
-      return user;
-    } catch (error) {
-      this.logger.error(
-        `Google authentication failed: ${error.message}`,
-        error.stack,
-      );
-      throw AppException.unauthorized('google_auth_failed');
-    }
   }
 
   async updateProfile(
@@ -369,66 +422,7 @@ export class AuthService {
   ): Promise<User> {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
-    });
-
-    if (!user) {
-      throw new NotFoundException({
-        error: 'user_not_found',
-        message: 'User not found',
-      });
-    }
-
-    // Update in Firebase if email is changing
-    if (updateProfileDto.email && updateProfileDto.email !== user.email) {
-      try {
-        await this.firebaseAdmin.updateUser(user.firebaseUid, {
-          email: updateProfileDto.email,
-        });
-      } catch (error) {
-        this.logger.error(
-          `Firebase email update failed: ${error.message}`,
-          error.stack,
-        );
-        throw AppException.internal('email_update_failed');
-      }
-    }
-
-    // Update in database
-    return this.prisma.user.update({
-      where: { id: userId },
-      data: updateProfileDto,
-      include: {
-        settings: true,
-        stats: true,
-      },
-    });
-  }
-
-  async resetPassword(resetPasswordDto: ResetPasswordDto): Promise<void> {
-    const { email } = resetPasswordDto;
-
-    try {
-      await this.firebaseAdmin.generatePasswordResetLink(email);
-      this.logger.log(
-        `Password reset link generation initiated for email: ${email}`,
-      );
-    } catch (error) {
-      if (error.code === 'auth/user-not-found') {
-        this.logger.warn(
-          `Password reset attempt for non-existent user: ${email}`,
-        );
-      } else {
-        this.logger.error(
-          `Password reset link generation failed for email ${email}: ${error.message}`,
-          error.stack,
-        );
-      }
-    }
-  }
-
-  async sendEmailVerification(userId: string): Promise<void> {
-    const user = await this.prisma.user.findUnique({
-      where: { id: userId },
+      select: { id: true, email: true, firebaseUid: true },
     });
 
     if (!user) {
@@ -436,13 +430,49 @@ export class AuthService {
     }
 
     try {
-      await this.firebaseAdmin.generateEmailVerificationLink(user.email);
+      // Update Firebase if email is changing
+      if (updateProfileDto.email && updateProfileDto.email !== user.email) {
+        await this.firebaseAdmin.updateUser(user.firebaseUid, {
+          email: updateProfileDto.email,
+        });
+      }
+
+      // Prepare update data
+      const updateData: any = { ...updateProfileDto };
+      if (updateProfileDto.birthDate) {
+        updateData.birthDate = new Date(updateProfileDto.birthDate);
+      }
+
+      // Update database
+      const updatedUser = await this.prisma.user.update({
+        where: { id: userId },
+        data: updateData,
+        include: {
+          settings: true,
+          stats: true,
+        },
+      });
+
+      this.logger.log(`Profile updated for user: ${userId}`);
+      return updatedUser;
     } catch (error) {
-      this.logger.error(
-        `Email verification failed: ${error.message}`,
-        error.stack,
-      );
-      throw AppException.badRequest('bad_request', 'email_verification_failed');
+      this.logger.error(`Profile update failed: ${error.message}`);
+
+      if (error.code === 'auth/email-already-exists') {
+        throw AppException.conflict(
+          'user_already_exists',
+          'Email already in use',
+        );
+      }
+
+      if (error.code === 'P2002' && error.meta?.target?.includes('email')) {
+        throw AppException.conflict(
+          'user_already_exists',
+          'Email already exists',
+        );
+      }
+
+      throw AppException.internal('Profile update failed');
     }
   }
 
@@ -453,29 +483,117 @@ export class AuthService {
   ): Promise<void> {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
+      select: { id: true, email: true, firebaseUid: true },
     });
 
     if (!user) {
-      throw new NotFoundException({
-        error: 'user_not_found',
-        message: 'User not found',
-      });
+      throw AppException.notFound('user_not_found', 'User not found');
     }
 
     try {
-      // First verify old password is correct by signing in
+      // Verify current password
       await this.firebaseAdmin.signInWithEmailPassword(user.email, oldPassword);
 
-      // Then update password
+      // Update password
       await this.firebaseAdmin.updateUser(user.firebaseUid, {
         password: newPassword,
       });
+
+      this.logger.log(`Password changed for user: ${userId}`);
     } catch (error) {
-      this.logger.error(
-        `Password change failed: ${error.message}`,
-        error.stack,
+      this.logger.error(`Password change failed: ${error.message}`);
+
+      if (
+        error.code === 'auth/wrong-password' ||
+        error.code === 'auth/invalid-credential'
+      ) {
+        throw AppException.badRequest(
+          'invalid_credentials',
+          'Current password is incorrect',
+        );
+      }
+
+      if (error.code === 'auth/weak-password') {
+        throw AppException.badRequest(
+          'bad_request',
+          'New password is too weak',
+        );
+      }
+
+      throw AppException.badRequest('bad_request', 'Password change failed');
+    }
+  }
+
+  async resetPassword(resetPasswordDto: ResetPasswordDto): Promise<void> {
+    try {
+      await this.firebaseAdmin.generatePasswordResetLink(
+        resetPasswordDto.email,
       );
-      throw AppException.badRequest('bad_request', 'password_change_failed');
+      this.logger.log(`Password reset link sent to: ${resetPasswordDto.email}`);
+    } catch (error) {
+      // Security: Don't reveal whether user exists
+      if (error.code === 'auth/user-not-found') {
+        this.logger.warn(
+          `Password reset for non-existent user: ${resetPasswordDto.email}`,
+        );
+      } else {
+        this.logger.error(`Password reset failed: ${error.message}`);
+      }
+      // Always succeed for security
+    }
+  }
+
+  async sendEmailVerification(userId: string): Promise<void> {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { id: true, email: true },
+    });
+
+    if (!user) {
+      throw AppException.notFound('user_not_found', 'User not found');
+    }
+
+    try {
+      await this.firebaseAdmin.generateEmailVerificationLink(user.email);
+      this.logger.log(`Email verification sent to user: ${userId}`);
+    } catch (error) {
+      this.logger.error(`Email verification failed: ${error.message}`);
+      throw AppException.badRequest('bad_request', 'Email verification failed');
+    }
+  }
+
+  async deleteUser(id: string): Promise<void> {
+    const user = await this.prisma.user.findUnique({
+      where: { id },
+      select: { id: true, firebaseUid: true },
+    });
+
+    if (!user) {
+      throw AppException.notFound('user_not_found', 'User not found');
+    }
+
+    try {
+      // Delete from Firebase first
+      if (user.firebaseUid) {
+        await this.firebaseAdmin.deleteUser(user.firebaseUid);
+      }
+
+      // Delete from database
+      await this.prisma.user.delete({
+        where: { id },
+      });
+
+      this.logger.log(`User deleted: ${id}`);
+    } catch (error) {
+      this.logger.error(`User deletion failed: ${error.message}`);
+
+      if (error.code === 'auth/user-not-found') {
+        // Firebase user already deleted, continue with database
+        await this.prisma.user.delete({ where: { id } });
+        return;
+      }
+
+      throw AppException.internal('User deletion failed');
     }
   }
 }

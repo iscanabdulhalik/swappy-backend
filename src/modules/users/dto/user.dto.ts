@@ -7,6 +7,7 @@ import {
   IsArray,
   ValidateNested,
   IsUUID,
+  IsDateString,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { LanguageLevel } from '@prisma/client';
@@ -27,6 +28,15 @@ export class UpdateUserDto {
   @IsString()
   @IsOptional()
   bio?: string;
+
+  @IsArray()
+  @IsString({ each: true })
+  @IsOptional()
+  hobbies?: string[];
+
+  @IsDateString()
+  @IsOptional()
+  birthDate?: string;
 
   @IsString()
   @IsOptional()

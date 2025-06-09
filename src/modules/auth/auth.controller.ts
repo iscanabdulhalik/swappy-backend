@@ -45,7 +45,7 @@ export class AuthController {
   @ApiOperation({ summary: 'Login with email and password' })
   async login(
     @Body() loginDto: LoginDto,
-  ): Promise<{ user: User; idToken: string }> {
+  ): Promise<{ userId: string; idToken: string; user: User }> {
     return this.authService.login(loginDto);
   }
 

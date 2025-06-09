@@ -1,4 +1,4 @@
-import { IsBoolean, IsEnum, IsObject, IsOptional } from 'class-validator';
+import { IsBoolean, IsObject, IsOptional } from 'class-validator';
 import { NotificationType } from 'src/common/enums/app.enum';
 
 export class UpdateNotificationSettingsDto {

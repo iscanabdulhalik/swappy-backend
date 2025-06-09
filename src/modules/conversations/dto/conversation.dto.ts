@@ -64,7 +64,6 @@ export class ReadConversationDto {
 }
 
 export class TranslationRequestDto {
-  @IsString()
   @IsEnum(['auto', 'en', 'tr', 'es', 'fr', 'de', 'ru', 'ja', 'zh', 'ko', 'ar'])
   targetLanguage: string = 'auto';
 }

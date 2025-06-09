@@ -93,12 +93,18 @@ export class UsersService {
    */
   async updateUser(id: string, updateUserDto: UpdateUserDto): Promise<User> {
     try {
-      // First check if user exists
       await this.getUserById(id);
+
+      const updateData = {
+        ...updateUserDto,
+        ...(updateUserDto.birthDate && {
+          birthDate: new Date(updateUserDto.birthDate),
+        }),
+      };
 
       return this.prisma.user.update({
         where: { id },
-        data: updateUserDto,
+        data: updateData,
       });
     } catch (error) {
       this.logger.error(`Error updating user: ${error.message}`, error.stack);
@@ -623,6 +629,28 @@ export class UsersService {
     } catch (error) {
       this.logger.error(`Error deleting user: ${error.message}`, error.stack);
       throw error;
+    }
+  }
+
+  async getUserHobbies(userId: string): Promise<string[]> {
+    try {
+      const user = await this.prisma.user.findUnique({
+        where: { id: userId },
+        select: {
+          hobbies: true,
+        },
+      });
+      return user?.hobbies || [];
+    } catch (error) {
+      this.logger.error(
+        `Error getting user hobbies: ${error.message}`,
+        error.stack,
+      );
+      throw new AppException(
+        500,
+        'internal_error',
+        'Kullanıcı hobileri alınamadı',
+      );
     }
   }
 }
