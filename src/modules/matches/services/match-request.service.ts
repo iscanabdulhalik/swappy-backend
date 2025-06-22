@@ -1,5 +1,3 @@
-// src/modules/matches/services/match-request.service.ts - TypeScript hata düzeltmesi
-
 import {
   Injectable,
   NotFoundException,
@@ -69,15 +67,11 @@ export class MatchRequestService {
     private readonly transactionHelper: TransactionHelper,
   ) {}
 
-  /**
-   * Accept a match request with proper transaction scope and type safety
-   */
   async acceptMatchRequest(
     requestId: string,
     receiverId: string,
   ): Promise<MatchWithDetails> {
     try {
-      // İlk olarak request'i kontrol et (transaction dışında)
       const request = await this.prisma.matchRequest.findUnique({
         where: { id: requestId },
         include: {
@@ -108,7 +102,6 @@ export class MatchRequestService {
         );
       }
 
-      // Sender ve receiver'ın dil bilgilerini al (transaction dışında)
       const [senderLanguages, receiverLanguages] = await Promise.all([
         this.prisma.userLanguage.findMany({
           where: { userId: request.senderId, isLearning: true },
@@ -120,21 +113,17 @@ export class MatchRequestService {
         }),
       ]);
 
-      // Conversation için dil seçimini yap (transaction dışında)
       const conversationLanguageId = await this.selectConversationLanguage(
         senderLanguages,
         receiverLanguages,
       );
 
-      // Tüm ana işlemleri tek transaction içinde yap
       return await this.transactionHelper.runInTransaction(async (tx) => {
-        // 1. İstek durumunu güncelle
         await tx.matchRequest.update({
           where: { id: requestId },
           data: { status: 'accepted' },
         });
 
-        // 2. Match oluştur
         const match = await tx.match.create({
           data: {
             initiatorId: request.senderId,
@@ -142,7 +131,6 @@ export class MatchRequestService {
           },
         });
 
-        // 3. Conversation oluştur (eğer dil bulunduysa)
         let conversationId: string | null = null;
         if (conversationLanguageId) {
           const conversation = await tx.conversation.create({
@@ -155,14 +143,12 @@ export class MatchRequestService {
           });
           conversationId = conversation.id;
 
-          // Match'i conversation ile ilişkilendir
           await tx.match.update({
             where: { id: match.id },
             data: { conversationId: conversationId },
           });
         }
 
-        // 4. Kullanıcı istatistiklerini güncelle
         await Promise.all([
           tx.userStats.update({
             where: { userId: request.senderId },
@@ -174,7 +160,6 @@ export class MatchRequestService {
           }),
         ]);
 
-        // 5. Match'i güncellenmiş conversation ID'si ile döndür
         const updatedMatch = await tx.match.findUnique({
           where: { id: match.id },
           include: {
@@ -226,15 +211,11 @@ export class MatchRequestService {
     }
   }
 
-  /**
-   * Conversation için uygun dil seçimi (type-safe)
-   */
   private async selectConversationLanguage(
     senderLanguages: UserLanguageWithLanguage[],
     receiverLanguages: UserLanguageWithLanguage[],
   ): Promise<string | null> {
     try {
-      // Ortak dil bul (gönderen öğreniyor, alıcı anadil olarak biliyor)
       for (const senderLang of senderLanguages) {
         const matchingLang = receiverLanguages.find(
           (receiverLang) => receiverLang.languageId === senderLang.languageId,
@@ -244,7 +225,6 @@ export class MatchRequestService {
         }
       }
 
-      // Eğer ortak dil bulunamazsa, İngilizce'yi varsayılan olarak kullan
       const englishLanguage = await this.prisma.language.findFirst({
         where: { code: 'en' },
       });
@@ -253,12 +233,10 @@ export class MatchRequestService {
         return englishLanguage.id;
       }
 
-      // Son çare: Gönderenin öğrendiği ilk dil
       if (senderLanguages.length > 0) {
         return senderLanguages[0].languageId;
       }
 
-      // Hiçbir dil bulunamazsa null döndür
       this.logger.warn('No suitable language found for conversation');
       return null;
     } catch (error) {
@@ -270,12 +248,8 @@ export class MatchRequestService {
     }
   }
 
-  /**
-   * Follow user with proper transaction and type safety
-   */
   async followUser(followerId: string, followingId: string): Promise<Follow> {
     try {
-      // Kullanıcı varlığı kontrolü (transaction dışında)
       const [follower, following] = await Promise.all([
         this.prisma.user.findUnique({
           where: { id: followerId },
@@ -305,7 +279,6 @@ export class MatchRequestService {
         );
       }
 
-      // Mevcut takip ilişkisi kontrolü (transaction dışında)
       const existingFollow = await this.prisma.follow.findUnique({
         where: {
           followerId_followingId: {
@@ -322,7 +295,6 @@ export class MatchRequestService {
         );
       }
 
-      // Takip işlemi ve stat güncellemelerini transaction içinde yap
       return await this.transactionHelper.runInTransaction(async (tx) => {
         const follow = await tx.follow.create({
           data: {
@@ -340,7 +312,6 @@ export class MatchRequestService {
           },
         });
 
-        // Takipçi/takip edilen sayılarını güncelle
         await Promise.all([
           tx.userStats.update({
             where: { userId: followerId },
@@ -366,9 +337,6 @@ export class MatchRequestService {
     }
   }
 
-  /**
-   * Send a match request with proper validation and type safety
-   */
   async sendMatchRequest(
     senderId: string,
     requestDto: MatchRequestDto,
@@ -376,7 +344,6 @@ export class MatchRequestService {
     const { receiverId, message } = requestDto;
 
     try {
-      // Kullanıcı varlığı kontrolü (transaction dışında)
       const [sender, receiver] = await Promise.all([
         this.prisma.user.findUnique({
           where: { id: senderId },
@@ -406,7 +373,6 @@ export class MatchRequestService {
         );
       }
 
-      // Mevcut ilişkileri kontrol et (transaction dışında)
       const [existingMatch, existingRequest, pendingRequest] =
         await Promise.all([
           this.prisma.match.findFirst({
@@ -446,20 +412,17 @@ export class MatchRequestService {
         );
       }
 
-      // Karşılıklı istek varsa otomatik kabul et
       if (pendingRequest && pendingRequest.status === 'pending') {
         this.logger.log(
           `Auto-accepting mutual match request between ${senderId} and ${receiverId}`,
         );
 
         return await this.transactionHelper.runInTransaction(async (tx) => {
-          // Mevcut isteği kabul et
           await tx.matchRequest.update({
             where: { id: pendingRequest.id },
             data: { status: 'accepted' },
           });
 
-          // Yeni isteği kabul edilmiş olarak oluştur
           const newRequest = await tx.matchRequest.create({
             data: {
               senderId,
@@ -485,15 +448,13 @@ export class MatchRequestService {
             },
           });
 
-          // Match oluştur
           await tx.match.create({
             data: {
-              initiatorId: receiverId, // İlk isteği gönderen initiator
+              initiatorId: receiverId,
               receiverId: senderId,
             },
           });
 
-          // Stats güncelle
           await Promise.all([
             tx.userStats.update({
               where: { userId: senderId },
@@ -509,7 +470,6 @@ export class MatchRequestService {
         }, 'Karşılıklı eşleşme isteği işlenemedi');
       }
 
-      // Normal istek oluştur
       const newRequest = await this.prisma.matchRequest.create({
         data: {
           senderId,
@@ -555,15 +515,11 @@ export class MatchRequestService {
     }
   }
 
-  /**
-   * Reject a match request with proper type safety
-   */
   async rejectMatchRequest(
     requestId: string,
     receiverId: string,
   ): Promise<MatchRequest> {
     try {
-      // Request kontrolü (transaction dışında)
       const request = await this.prisma.matchRequest.findUnique({
         where: { id: requestId },
         include: {
