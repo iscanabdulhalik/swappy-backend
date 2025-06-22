@@ -29,9 +29,6 @@ export class PostsService {
     private readonly transactionHelper: TransactionHelper,
   ) {}
 
-  /**
-   * Get feed posts
-   */
   async getFeed(
     userId: string,
     queryDto: FeedQueryDto,
@@ -41,7 +38,6 @@ export class PostsService {
     try {
       const { type, sort, languageId } = queryDto;
 
-      // Takip edilen kullanıcıları tek seferde yükle
       let followingIds: string[] = [];
       if (type === 'friends') {
         const following = await this.prisma.follow.findMany({
@@ -51,53 +47,42 @@ export class PostsService {
         followingIds = following.map((f) => f.followingId);
       }
 
-      // Sorgu oluştur
       let query: any = {};
 
       switch (type) {
         case 'friends':
           query = {
             OR: [
-              { authorId: userId }, // Kullanıcının kendi gönderileri
+              { authorId: userId },
               {
-                AND: [
-                  { authorId: { in: followingIds } }, // Takip edilen kullanıcıların gönderileri
-                  { isPublic: true }, // Herkese açık olan
-                ],
+                AND: [{ authorId: { in: followingIds } }, { isPublic: true }],
               },
             ],
           };
           break;
         default:
-          // Varsayılan tip 'all'
           query = {
-            OR: [
-              { authorId: userId }, // Kullanıcının kendi gönderileri
-              { isPublic: true }, // Herkese açık olan
-            ],
+            OR: [{ authorId: userId }, { isPublic: true }],
           };
       }
 
-      // Dil filtresi ekle
       if (languageId) {
         query.languageId = languageId;
       }
 
-      // Sıralama tanımla
       let orderBy: any;
       switch (sort) {
         case 'popular':
           orderBy = { likes: { _count: 'desc' } };
           break;
         case 'relevance':
-          orderBy = { createdAt: 'desc' }; // Şimdilik createdAt kullan
+          orderBy = { createdAt: 'desc' };
           break;
         case 'recent':
         default:
           orderBy = { createdAt: 'desc' };
       }
 
-      // Toplam sayıyı öğren
       const total = await this.prisma.post.count({ where: query });
 
       // Tek sorguda tüm ilişkileri getir (N+1 sorununu önlemek için)
@@ -133,7 +118,6 @@ export class PostsService {
         orderBy,
       });
 
-      // Kullanıcı beğenilerini dönüştür
       const transformedPosts = posts.map((post) => ({
         ...post,
         likedByMe: post.likes.length > 0,
@@ -176,7 +160,6 @@ export class PostsService {
         },
       });
 
-      // Update user stats
       await tx.userStats.update({
         where: { userId: authorId },
         data: { postsCount: { increment: 1 } },
@@ -191,7 +174,6 @@ export class PostsService {
     userId: string,
     mediaDto: CreatePostMediaDto,
   ) {
-    // Check if post exists and belongs to the user
     const post = await this.prisma.post.findUnique({
       where: { id: postId },
     });
@@ -210,7 +192,6 @@ export class PostsService {
       });
     }
 
-    // Add media
     return this.prisma.postMedia.create({
       data: {
         postId,
@@ -221,9 +202,6 @@ export class PostsService {
     });
   }
 
-  /**
-   * Get a post by ID
-   */
   async getPostById(postId: string, userId: string) {
     const post = await this.prisma.post.findUnique({
       where: { id: postId },
@@ -261,7 +239,6 @@ export class PostsService {
       });
     }
 
-    // Check if the post is not public and the user is not the author
     if (!post.isPublic && post.authorId !== userId) {
       throw new ForbiddenException({
         error: 'private_post',
@@ -277,15 +254,11 @@ export class PostsService {
     };
   }
 
-  /**
-   * Update a post
-   */
   async updatePost(
     postId: string,
     userId: string,
     updatePostDto: UpdatePostDto,
   ) {
-    // Check if post exists and belongs to the user
     const post = await this.prisma.post.findUnique({
       where: { id: postId },
     });
@@ -324,11 +297,7 @@ export class PostsService {
     });
   }
 
-  /**
-   * Delete a post
-   */
   async deletePost(postId: string, userId: string) {
-    // Check if post exists and belongs to the user
     const post = await this.prisma.post.findUnique({
       where: { id: postId },
     });
@@ -347,23 +316,17 @@ export class PostsService {
       });
     }
 
-    // Delete post
     await this.prisma.post.delete({
       where: { id: postId },
     });
 
-    // Update user stats
     await this.prisma.userStats.update({
       where: { userId },
       data: { postsCount: { decrement: 1 } },
     });
   }
 
-  /**
-   * Toggle like on a post
-   */
   async toggleLikePost(postId: string, userId: string) {
-    // Check if post exists
     const post = await this.prisma.post.findUnique({
       where: { id: postId },
       include: {
@@ -383,7 +346,6 @@ export class PostsService {
       });
     }
 
-    // Check if user already liked the post
     const existingLike = await this.prisma.postLike.findUnique({
       where: {
         postId_userId: {
@@ -410,7 +372,6 @@ export class PostsService {
         },
       });
 
-      // Send notification to post author if it's not the same user
       if (post.authorId !== userId) {
         this.notificationGateway.sendNotification(post.authorId, {
           type: NotificationType.LIKE,
@@ -425,9 +386,6 @@ export class PostsService {
     }
   }
 
-  /**
-   * Get comments for a post
-   */
   async getPostComments(
     postId: string,
     userId: string,
@@ -544,9 +502,6 @@ export class PostsService {
     };
   }
 
-  /**
-   * Add a comment to a post
-   */
   async addComment(
     postId: string,
     userId: string,
@@ -564,7 +519,6 @@ export class PostsService {
       });
     }
 
-    // Check if the post is not public and the user is not the author
     if (!post.isPublic && post.authorId !== userId) {
       throw new ForbiddenException({
         error: 'private_post',
@@ -572,7 +526,6 @@ export class PostsService {
       });
     }
 
-    // If this is a reply, check if parent comment exists
     if (createCommentDto.parentCommentId) {
       const parentComment = await this.prisma.comment.findUnique({
         where: { id: createCommentDto.parentCommentId },
@@ -607,7 +560,6 @@ export class PostsService {
       },
     });
 
-    // Send notification to post author if it's not the same user
     if (post.authorId !== userId) {
       this.notificationGateway.sendNotification(post.authorId, {
         type: NotificationType.COMMENT,
@@ -618,7 +570,6 @@ export class PostsService {
       });
     }
 
-    // If this is a reply, also notify the parent comment author
     if (createCommentDto.parentCommentId) {
       const parentComment = await this.prisma.comment.findUnique({
         where: { id: createCommentDto.parentCommentId },
@@ -638,15 +589,11 @@ export class PostsService {
     return comment;
   }
 
-  /**
-   * Update a comment
-   */
   async updateComment(
     commentId: string,
     userId: string,
     updateCommentDto: UpdateCommentDto,
   ) {
-    // Check if comment exists and belongs to the user
     const comment = await this.prisma.comment.findUnique({
       where: { id: commentId },
     });
@@ -665,7 +612,6 @@ export class PostsService {
       });
     }
 
-    // Update comment
     return this.prisma.comment.update({
       where: { id: commentId },
       data: {
@@ -685,11 +631,7 @@ export class PostsService {
     });
   }
 
-  /**
-   * Delete a comment
-   */
   async deleteComment(commentId: string, userId: string) {
-    // Check if comment exists and belongs to the user
     const comment = await this.prisma.comment.findUnique({
       where: { id: commentId },
       include: {
@@ -704,7 +646,6 @@ export class PostsService {
       });
     }
 
-    // Allow deletion if user is the comment author or the post author
     if (comment.authorId !== userId && comment.post.authorId !== userId) {
       throw new ForbiddenException({
         error: 'not_authorized',
@@ -712,15 +653,11 @@ export class PostsService {
       });
     }
 
-    // Delete comment
     await this.prisma.comment.delete({
       where: { id: commentId },
     });
   }
 
-  /**
-   * Toggle like on a comment
-   */
   async toggleLikeComment(commentId: string, userId: string) {
     // Check if comment exists
     const comment = await this.prisma.comment.findUnique({
@@ -742,7 +679,6 @@ export class PostsService {
       });
     }
 
-    // Check if user already liked the comment
     const existingLike = await this.prisma.commentLike.findUnique({
       where: {
         commentId_userId: {
@@ -753,7 +689,6 @@ export class PostsService {
     });
 
     if (existingLike) {
-      // Unlike the comment
       await this.prisma.commentLike.delete({
         where: {
           id: existingLike.id,
@@ -761,7 +696,6 @@ export class PostsService {
       });
       return { liked: false };
     } else {
-      // Like the comment
       await this.prisma.commentLike.create({
         data: {
           commentId,
@@ -769,7 +703,6 @@ export class PostsService {
         },
       });
 
-      // Send notification to comment author if it's not the same user
       if (comment.authorId !== userId) {
         this.notificationGateway.sendNotification(comment.authorId, {
           type: NotificationType.LIKE,

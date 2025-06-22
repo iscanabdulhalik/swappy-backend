@@ -118,9 +118,7 @@ export class LearningService {
     }
   }
 
-  /**
-   * Get suggestions based on context using AI
-   */
+
   async getSuggestions(userId: string, context: string, languageCode: string) {
     // Kullanıcı ve dil doğrulaması
     await this.validationHelper.validateUserExists(userId);

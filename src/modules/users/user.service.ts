@@ -35,55 +35,6 @@ export class UsersService {
   ) {}
 
   /**
-   * Get a user by ID with optional related data
-   *
-   * @param id - The user's unique identifier
-   * @param includeLanguages - Whether to include language data
-   * @param includeStats - Whether to include user statistics
-   * @param includeSettings - Whether to include user settings
-   * @returns User object with requested relations
-   * @throws NotFoundException if user not found
-   */
-  async getUserById(
-    id: string,
-    includeLanguages = false,
-    includeStats = false,
-    includeSettings = false,
-  ): Promise<User> {
-    try {
-      const user = await this.prisma.user.findUnique({
-        where: { id },
-        include: {
-          languages: includeLanguages
-            ? {
-                include: {
-                  language: true,
-                },
-              }
-            : false,
-          stats: includeStats,
-          settings: includeSettings,
-        },
-      });
-
-      if (!user) {
-        this.logger.warn(`User not found: ${id}`);
-        throw new NotFoundException({
-          error: 'user_not_found',
-          message: 'User not found',
-        });
-      }
-
-      return user;
-    } catch (error) {
-      if (!(error instanceof NotFoundException)) {
-        this.logger.error(`Error fetching user: ${error.message}`, error.stack);
-      }
-      throw error;
-    }
-  }
-
-  /**
    * Update a user's profile information
    *
    * @param id - The user's unique identifier
@@ -241,81 +192,6 @@ export class UsersService {
   }
 
   /**
-   * Search for users based on various criteria
-   *
-   * @param userId - Current user's ID (to exclude from results)
-   * @param searchDto - Search criteria
-   * @param limit - Maximum number of results to return
-   * @param offset - Pagination offset
-   * @returns Object containing matching users and total count
-   */
-  async searchUsers(
-    userId: string,
-    searchDto: UserSearchDto,
-    limit = 20,
-    offset = 0,
-  ): Promise<{ items: User[]; total: number }> {
-    try {
-      const filters: any = {
-        id: { not: userId },
-        isActive: true,
-      };
-
-      if (searchDto.query) {
-        filters.OR = [
-          { displayName: { contains: searchDto.query, mode: 'insensitive' } },
-          { firstName: { contains: searchDto.query, mode: 'insensitive' } },
-          { lastName: { contains: searchDto.query, mode: 'insensitive' } },
-        ];
-      }
-
-      if (searchDto.nativeLanguageId) {
-        filters.languages = {
-          some: {
-            languageId: searchDto.nativeLanguageId,
-            isNative: true,
-          },
-        };
-      }
-
-      if (searchDto.learningLanguageId) {
-        filters.languages = {
-          some: {
-            languageId: searchDto.learningLanguageId,
-            isLearning: true,
-          },
-        };
-      }
-
-      if (searchDto.countryCode) {
-        filters.countryCode = searchDto.countryCode;
-      }
-
-      const [total, users] = await Promise.all([
-        this.prisma.user.count({ where: filters }),
-        this.prisma.user.findMany({
-          where: filters,
-          include: {
-            languages: {
-              where: { isNative: true },
-              include: {
-                language: true,
-              },
-            },
-          },
-          take: limit,
-          skip: offset,
-        }),
-      ]);
-
-      return { items: users, total };
-    } catch (error) {
-      this.logger.error(`Error searching users: ${error.message}`, error.stack);
-      throw error;
-    }
-  }
-
-  /**
    * Get all available languages (cached)
    *
    * @returns Array of all language objects
@@ -464,37 +340,49 @@ export class UsersService {
     offset = 0,
   ): Promise<{ items: User[]; total: number }> {
     try {
-      await this.getUserById(userId);
+      // Kullanıcı var mı kontrol et
+      await this.validateUserExists(userId);
 
-      const total = await this.prisma.follow.count({
-        where: { followingId: userId },
-      });
+      // Input validation
+      const safeLimit = Math.min(Math.max(1, limit), 100);
+      const safeOffset = Math.max(0, offset);
 
-      const followers = await this.prisma.user.findMany({
-        where: {
-          following: {
-            some: {
-              followingId: userId,
+      // Tek sorguda tüm gerekli verileri çek (N+1 problemi çözümü)
+      const [total, followersData] = await Promise.all([
+        this.prisma.follow.count({
+          where: { followingId: userId },
+        }),
+        this.prisma.follow.findMany({
+          where: { followingId: userId },
+          include: {
+            follower: {
+              include: {
+                languages: {
+                  where: { isNative: true },
+                  include: { language: true },
+                  take: 5, // Performans için limit
+                },
+                stats: {
+                  select: {
+                    matchesCount: true,
+                    followersCount: true,
+                    followingCount: true,
+                    lastActiveDate: true,
+                  },
+                },
+              },
             },
           },
-        },
-        include: {
-          languages: {
-            where: {
-              isNative: true, // Veritabanı seviyesinde filtreleme
-            },
-            include: {
-              language: true,
-            },
+          take: safeLimit,
+          skip: safeOffset,
+          orderBy: {
+            createdAt: 'desc',
           },
-          stats: true, // İhtiyaç varsa stat bilgilerini de getir
-        },
-        take: limit,
-        skip: offset,
-        orderBy: {
-          displayName: 'asc',
-        },
-      });
+        }),
+      ]);
+
+      // Sadece follower user'ları döndür
+      const followers = followersData.map((follow) => follow.follower);
 
       return {
         items: followers,
@@ -505,17 +393,18 @@ export class UsersService {
         `Kullanıcı takipçilerini alırken hata: ${error.message}`,
         error.stack,
       );
+
       if (error instanceof AppException) {
         throw error;
       }
-      throw new AppException(
-        500,
-        'internal_error',
-        'Kullanıcı takipçileri alınamadı',
-      );
+
+      throw AppException.internal('Kullanıcı takipçileri alınamadı');
     }
   }
 
+  /**
+   * Get user following with optimized query (N+1 fix)
+   */
   async getUserFollowing(
     userId: string,
     limit = 20,
@@ -523,39 +412,48 @@ export class UsersService {
   ): Promise<{ items: User[]; total: number }> {
     try {
       // Kullanıcı var mı kontrol et
-      await this.getUserById(userId);
+      await this.validateUserExists(userId);
 
-      // Toplam sayıyı öğren
-      const total = await this.prisma.follow.count({
-        where: { followerId: userId },
-      });
+      // Input validation
+      const safeLimit = Math.min(Math.max(1, limit), 100);
+      const safeOffset = Math.max(0, offset);
 
-      // Takip edilenleri al - N+1 sorununu önlemek için tek sorguda
-      const following = await this.prisma.user.findMany({
-        where: {
-          followers: {
-            some: {
-              followerId: userId,
+      // Tek sorguda tüm gerekli verileri çek (N+1 problemi çözümü)
+      const [total, followingData] = await Promise.all([
+        this.prisma.follow.count({
+          where: { followerId: userId },
+        }),
+        this.prisma.follow.findMany({
+          where: { followerId: userId },
+          include: {
+            following: {
+              include: {
+                languages: {
+                  where: { isNative: true },
+                  include: { language: true },
+                  take: 5, // Performans için limit
+                },
+                stats: {
+                  select: {
+                    matchesCount: true,
+                    followersCount: true,
+                    followingCount: true,
+                    lastActiveDate: true,
+                  },
+                },
+              },
             },
           },
-        },
-        include: {
-          languages: {
-            where: {
-              isNative: true, // Veritabanı seviyesinde filtreleme
-            },
-            include: {
-              language: true,
-            },
+          take: safeLimit,
+          skip: safeOffset,
+          orderBy: {
+            createdAt: 'desc',
           },
-          stats: true, // İhtiyaç varsa stat bilgilerini de getir
-        },
-        take: limit,
-        skip: offset,
-        orderBy: {
-          displayName: 'asc',
-        },
-      });
+        }),
+      ]);
+
+      // Sadece following user'ları döndür
+      const following = followingData.map((follow) => follow.following);
 
       return {
         items: following,
@@ -566,14 +464,12 @@ export class UsersService {
         `Kullanıcının takip ettiklerini alırken hata: ${error.message}`,
         error.stack,
       );
+
       if (error instanceof AppException) {
         throw error;
       }
-      throw new AppException(
-        500,
-        'internal_error',
-        'Kullanıcının takip ettikleri alınamadı',
-      );
+
+      throw AppException.internal('Kullanıcının takip ettikleri alınamadı');
     }
   }
 
@@ -650,6 +546,371 @@ export class UsersService {
         500,
         'internal_error',
         'Kullanıcı hobileri alınamadı',
+      );
+    }
+  }
+
+  async searchUsers(
+    userId: string,
+    searchDto: UserSearchDto,
+    limit = 20,
+    offset = 0,
+  ): Promise<{ items: User[]; total: number }> {
+    try {
+      // Input validation
+      const safeLimit = Math.min(Math.max(1, limit), 100);
+      const safeOffset = Math.max(0, offset);
+
+      const filters: any = {
+        id: { not: userId },
+        isActive: true,
+      };
+
+      // Text search
+      if (searchDto.query?.trim()) {
+        const searchTerm = searchDto.query.trim();
+        filters.OR = [
+          { displayName: { contains: searchTerm, mode: 'insensitive' } },
+          { firstName: { contains: searchTerm, mode: 'insensitive' } },
+          { lastName: { contains: searchTerm, mode: 'insensitive' } },
+        ];
+      }
+
+      // Language filters
+      if (searchDto.nativeLanguageId || searchDto.learningLanguageId) {
+        const languageConditions: {
+          languageId: string;
+          isNative?: boolean;
+          isLearning?: boolean;
+        }[] = [];
+
+        if (searchDto.nativeLanguageId) {
+          languageConditions.push({
+            languageId: searchDto.nativeLanguageId,
+            isNative: true,
+          });
+        }
+
+        if (searchDto.learningLanguageId) {
+          languageConditions.push({
+            languageId: searchDto.learningLanguageId,
+            isLearning: true,
+          });
+        }
+
+        filters.languages = {
+          some:
+            languageConditions.length === 1
+              ? languageConditions[0]
+              : { OR: languageConditions },
+        };
+      }
+
+      // Country filter
+      if (searchDto.countryCode?.trim()) {
+        filters.countryCode = searchDto.countryCode.trim();
+      }
+
+      // Optimized query with all necessary relations in one go
+      const [total, users] = await Promise.all([
+        this.prisma.user.count({ where: filters }),
+        this.prisma.user.findMany({
+          where: filters,
+          include: {
+            languages: {
+              include: { language: true },
+              orderBy: [
+                { isNative: 'desc' },
+                { isLearning: 'desc' },
+                { level: 'desc' },
+              ],
+              take: 10, // Performans için limit
+            },
+            stats: {
+              select: {
+                matchesCount: true,
+                followersCount: true,
+                followingCount: true,
+                lastActiveDate: true,
+              },
+            },
+            // Mevcut kullanıcının bu kişiyi takip edip etmediğini kontrol et
+            followers: {
+              where: { followerId: userId },
+              select: { id: true },
+              take: 1,
+            },
+          },
+          take: safeLimit,
+          skip: safeOffset,
+          orderBy: [
+            { stats: { lastActiveDate: 'desc' } },
+            { displayName: 'asc' },
+          ],
+        }),
+      ]);
+
+      // Transform results to include isFollowing flag
+      const transformedUsers = users.map((user) => ({
+        ...user,
+        isFollowing: user.followers.length > 0,
+        followers: undefined, // Remove the followers array from response
+      }));
+
+      return {
+        items: transformedUsers,
+        total,
+      };
+    } catch (error) {
+      this.logger.error(
+        `Kullanıcı arama hatası: ${error.message}`,
+        error.stack,
+      );
+      throw AppException.internal('Kullanıcı araması gerçekleştirilemedi');
+    }
+  }
+
+  /**
+   * Get user by ID with optimized relations (N+1 fix)
+   */
+  async getUserById(
+    id: string,
+    includeLanguages = false,
+    includeStats = false,
+    includeSettings = false,
+  ): Promise<User> {
+    try {
+      const includeRelations: any = {};
+
+      if (includeLanguages) {
+        includeRelations.languages = {
+          include: { language: true },
+          orderBy: [
+            { isNative: 'desc' },
+            { isLearning: 'desc' },
+            { level: 'desc' },
+          ],
+        };
+      }
+
+      if (includeStats) {
+        includeRelations.stats = true;
+      }
+
+      if (includeSettings) {
+        includeRelations.settings = {
+          include: {
+            notificationPreferences: {
+              orderBy: { type: 'asc' },
+            },
+          },
+        };
+      }
+
+      const user = await this.prisma.user.findUnique({
+        where: { id },
+        include: includeRelations,
+      });
+
+      if (!user) {
+        this.logger.warn(`User not found: ${id}`);
+        throw AppException.notFound('user_not_found', 'User not found');
+      }
+
+      if (!user.isActive) {
+        throw AppException.badRequest(
+          'bad_request',
+          'User account is deactivated',
+        );
+      }
+
+      return user;
+    } catch (error) {
+      if (error instanceof AppException) {
+        throw error;
+      }
+
+      this.logger.error(`Error fetching user: ${error.message}`, error.stack);
+      throw AppException.internal('Error retrieving user');
+    }
+  }
+
+  /**
+   * Get user's mutual connections (optimized)
+   */
+  async getMutualConnections(
+    userId: string,
+    targetUserId: string,
+    limit = 10,
+  ): Promise<{ items: User[]; total: number }> {
+    try {
+      // Validate both users exist
+      await Promise.all([
+        this.validateUserExists(userId),
+        this.validateUserExists(targetUserId),
+      ]);
+
+      // Get mutual follows in one optimized query
+      const mutualFollows = await this.prisma.user.findMany({
+        where: {
+          AND: [
+            {
+              followers: {
+                some: { followerId: userId },
+              },
+            },
+            {
+              followers: {
+                some: { followerId: targetUserId },
+              },
+            },
+            {
+              id: { notIn: [userId, targetUserId] },
+            },
+            {
+              isActive: true,
+            },
+          ],
+        },
+        include: {
+          languages: {
+            where: { isNative: true },
+            include: { language: true },
+            take: 3,
+          },
+          stats: {
+            select: {
+              followersCount: true,
+              matchesCount: true,
+            },
+          },
+        },
+        take: limit,
+        orderBy: [
+          { stats: { followersCount: 'desc' } },
+          { displayName: 'asc' },
+        ],
+      });
+
+      return {
+        items: mutualFollows,
+        total: mutualFollows.length,
+      };
+    } catch (error) {
+      this.logger.error(
+        `Mutual connections error: ${error.message}`,
+        error.stack,
+      );
+      throw AppException.internal('Error retrieving mutual connections');
+    }
+  }
+
+  /**
+   * Get user activity feed (optimized for performance)
+   */
+  async getUserActivityFeed(
+    userId: string,
+    limit = 20,
+    offset = 0,
+  ): Promise<{ items: any[]; total: number }> {
+    try {
+      await this.validateUserExists(userId);
+
+      const safeLimit = Math.min(Math.max(1, limit), 50);
+      const safeOffset = Math.max(0, offset);
+
+      // Get user's following list first
+      const following = await this.prisma.follow.findMany({
+        where: { followerId: userId },
+        select: { followingId: true },
+      });
+
+      const followingIds = following.map((f) => f.followingId);
+      followingIds.push(userId); // Include user's own activities
+
+      // Get recent activities with all necessary data in one query
+      const activities = await this.prisma.post.findMany({
+        where: {
+          authorId: { in: followingIds },
+          isPublic: true,
+        },
+        include: {
+          author: {
+            select: {
+              id: true,
+              displayName: true,
+              profileImageUrl: true,
+            },
+          },
+          language: {
+            select: {
+              id: true,
+              name: true,
+              flagEmoji: true,
+            },
+          },
+          _count: {
+            select: {
+              likes: true,
+              comments: true,
+            },
+          },
+          likes: {
+            where: { userId },
+            select: { id: true },
+            take: 1,
+          },
+          media: {
+            select: {
+              id: true,
+              type: true,
+              url: true,
+            },
+            take: 3, // Limit media items for performance
+          },
+        },
+        take: safeLimit,
+        skip: safeOffset,
+        orderBy: { createdAt: 'desc' },
+      });
+
+      // Transform activities
+      const transformedActivities = activities.map((activity) => ({
+        ...activity,
+        isLiked: activity.likes.length > 0,
+        likes: undefined, // Remove likes array
+      }));
+
+      return {
+        items: transformedActivities,
+        total: transformedActivities.length,
+      };
+    } catch (error) {
+      this.logger.error(
+        `User activity feed error: ${error.message}`,
+        error.stack,
+      );
+      throw AppException.internal('Error retrieving activity feed');
+    }
+  }
+
+  /**
+   * Helper method to validate user existence
+   */
+  private async validateUserExists(userId: string): Promise<void> {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { id: true, isActive: true },
+    });
+
+    if (!user) {
+      throw AppException.notFound('user_not_found', 'User not found');
+    }
+
+    if (!user.isActive) {
+      throw AppException.badRequest(
+        'bad_request',
+        'User account is deactivated',
       );
     }
   }

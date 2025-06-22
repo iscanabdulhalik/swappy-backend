@@ -1,3 +1,5 @@
+// src/modules/matches/services/match-request.service.ts - TypeScript hata düzeltmesi
+
 import {
   Injectable,
   NotFoundException,
@@ -7,9 +9,56 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../../../../prisma/prisma.service';
 import { MatchRequestDto } from '../dto/match.dto';
-import { Follow, Match, MatchRequest } from '@prisma/client';
+import { Follow, Match, MatchRequest, Conversation } from '@prisma/client';
 import { AppException } from '../../../common/exceptions/app-exceptions';
 import { TransactionHelper } from '../../../common/helpers/transaction.helper';
+
+// Type definitions for better type safety
+type MatchRequestWithSender = MatchRequest & {
+  sender: {
+    id: string;
+    displayName: string;
+    languages: Array<{
+      languageId: string;
+      language: {
+        id: string;
+        name: string;
+        code: string;
+      };
+    }>;
+  };
+};
+
+type UserLanguageWithLanguage = {
+  userId: string;
+  languageId: string;
+  language: {
+    id: string;
+    name: string;
+    code: string;
+  };
+};
+
+type MatchWithDetails = Match & {
+  initiator: {
+    id: string;
+    displayName: string;
+    profileImageUrl: string | null;
+  };
+  receiver: {
+    id: string;
+    displayName: string;
+    profileImageUrl: string | null;
+  };
+  conversation?:
+    | (Conversation & {
+        language: {
+          id: string;
+          name: string;
+        };
+      })
+    | null;
+};
 
 @Injectable()
 export class MatchRequestService {
@@ -21,72 +70,304 @@ export class MatchRequestService {
   ) {}
 
   /**
-   * Create a conversation for a match
+   * Accept a match request with proper transaction scope and type safety
    */
-  private async createConversationForMatch(
-    userIds: string[],
-    languageId: string,
-    matchId?: string,
-  ) {
+  async acceptMatchRequest(
+    requestId: string,
+    receiverId: string,
+  ): Promise<MatchWithDetails> {
     try {
-      // Validation
-      if (userIds.length < 2) {
-        throw new BadRequestException({
-          error: 'invalid_participants',
-          message: 'Conversation must have at least 2 participants',
-        });
-      }
-
-      // Check language exists
-      const language = await this.prisma.language.findUnique({
-        where: { id: languageId },
-      });
-
-      if (!language) {
-        throw new NotFoundException({
-          error: 'language_not_found',
-          message: 'Language not found',
-        });
-      }
-
-      // Create conversation
-      const conversation = await this.prisma.conversation.create({
-        data: {
-          languageId,
-          participants: {
-            create: userIds.map((userId) => ({ userId })),
-          },
-        },
+      // İlk olarak request'i kontrol et (transaction dışında)
+      const request = await this.prisma.matchRequest.findUnique({
+        where: { id: requestId },
         include: {
-          language: true,
-          participants: {
-            include: {
-              user: {
-                select: {
-                  id: true,
-                  displayName: true,
-                  firstName: true,
-                  lastName: true,
-                  profileImageUrl: true,
-                },
-              },
+          sender: {
+            select: {
+              id: true,
+              displayName: true,
             },
           },
         },
       });
 
-      return conversation;
+      if (!request) {
+        throw AppException.notFound('not_found', 'Eşleşme isteği bulunamadı');
+      }
+
+      if (request.receiverId !== receiverId) {
+        throw AppException.badRequest(
+          'bad_request',
+          'Bu isteğin alıcısı siz değilsiniz',
+        );
+      }
+
+      if (request.status !== 'pending') {
+        throw AppException.badRequest(
+          'bad_request',
+          `İstek zaten ${request.status} durumunda`,
+        );
+      }
+
+      // Sender ve receiver'ın dil bilgilerini al (transaction dışında)
+      const [senderLanguages, receiverLanguages] = await Promise.all([
+        this.prisma.userLanguage.findMany({
+          where: { userId: request.senderId, isLearning: true },
+          include: { language: true },
+        }),
+        this.prisma.userLanguage.findMany({
+          where: { userId: receiverId, isNative: true },
+          include: { language: true },
+        }),
+      ]);
+
+      // Conversation için dil seçimini yap (transaction dışında)
+      const conversationLanguageId = await this.selectConversationLanguage(
+        senderLanguages,
+        receiverLanguages,
+      );
+
+      // Tüm ana işlemleri tek transaction içinde yap
+      return await this.transactionHelper.runInTransaction(async (tx) => {
+        // 1. İstek durumunu güncelle
+        await tx.matchRequest.update({
+          where: { id: requestId },
+          data: { status: 'accepted' },
+        });
+
+        // 2. Match oluştur
+        const match = await tx.match.create({
+          data: {
+            initiatorId: request.senderId,
+            receiverId,
+          },
+        });
+
+        // 3. Conversation oluştur (eğer dil bulunduysa)
+        let conversationId: string | null = null;
+        if (conversationLanguageId) {
+          const conversation = await tx.conversation.create({
+            data: {
+              languageId: conversationLanguageId,
+              participants: {
+                create: [{ userId: request.senderId }, { userId: receiverId }],
+              },
+            },
+          });
+          conversationId = conversation.id;
+
+          // Match'i conversation ile ilişkilendir
+          await tx.match.update({
+            where: { id: match.id },
+            data: { conversationId: conversationId },
+          });
+        }
+
+        // 4. Kullanıcı istatistiklerini güncelle
+        await Promise.all([
+          tx.userStats.update({
+            where: { userId: request.senderId },
+            data: { matchesCount: { increment: 1 } },
+          }),
+          tx.userStats.update({
+            where: { userId: receiverId },
+            data: { matchesCount: { increment: 1 } },
+          }),
+        ]);
+
+        // 5. Match'i güncellenmiş conversation ID'si ile döndür
+        const updatedMatch = await tx.match.findUnique({
+          where: { id: match.id },
+          include: {
+            initiator: {
+              select: {
+                id: true,
+                displayName: true,
+                profileImageUrl: true,
+              },
+            },
+            receiver: {
+              select: {
+                id: true,
+                displayName: true,
+                profileImageUrl: true,
+              },
+            },
+            conversation: conversationId
+              ? {
+                  include: {
+                    language: true,
+                  },
+                }
+              : false,
+          },
+        });
+
+        if (!updatedMatch) {
+          throw new Error('Failed to retrieve created match');
+        }
+
+        this.logger.log(
+          `Match ${match.id} created successfully with conversation ${conversationId || 'none'}`,
+        );
+
+        return updatedMatch as MatchWithDetails;
+      }, 'Eşleşme isteği kabul edilemedi');
     } catch (error) {
       this.logger.error(
-        `Error creating conversation: ${error.message}`,
+        `Eşleşme isteği kabul hatası: ${error.message}`,
         error.stack,
       );
-      throw error;
+
+      if (error instanceof AppException) {
+        throw error;
+      }
+
+      throw AppException.internal('Eşleşme isteği kabul edilemedi');
     }
   }
 
   /**
-   * Send a match request
+   * Conversation için uygun dil seçimi (type-safe)
+   */
+  private async selectConversationLanguage(
+    senderLanguages: UserLanguageWithLanguage[],
+    receiverLanguages: UserLanguageWithLanguage[],
+  ): Promise<string | null> {
+    try {
+      // Ortak dil bul (gönderen öğreniyor, alıcı anadil olarak biliyor)
+      for (const senderLang of senderLanguages) {
+        const matchingLang = receiverLanguages.find(
+          (receiverLang) => receiverLang.languageId === senderLang.languageId,
+        );
+        if (matchingLang) {
+          return senderLang.languageId;
+        }
+      }
+
+      // Eğer ortak dil bulunamazsa, İngilizce'yi varsayılan olarak kullan
+      const englishLanguage = await this.prisma.language.findFirst({
+        where: { code: 'en' },
+      });
+
+      if (englishLanguage) {
+        return englishLanguage.id;
+      }
+
+      // Son çare: Gönderenin öğrendiği ilk dil
+      if (senderLanguages.length > 0) {
+        return senderLanguages[0].languageId;
+      }
+
+      // Hiçbir dil bulunamazsa null döndür
+      this.logger.warn('No suitable language found for conversation');
+      return null;
+    } catch (error) {
+      this.logger.error(
+        `Error selecting conversation language: ${error.message}`,
+        error.stack,
+      );
+      return null;
+    }
+  }
+
+  /**
+   * Follow user with proper transaction and type safety
+   */
+  async followUser(followerId: string, followingId: string): Promise<Follow> {
+    try {
+      // Kullanıcı varlığı kontrolü (transaction dışında)
+      const [follower, following] = await Promise.all([
+        this.prisma.user.findUnique({
+          where: { id: followerId },
+          select: { id: true, isActive: true },
+        }),
+        this.prisma.user.findUnique({
+          where: { id: followingId },
+          select: { id: true, isActive: true },
+        }),
+      ]);
+
+      if (!follower || !following) {
+        throw AppException.notFound('user_not_found', 'Kullanıcı bulunamadı');
+      }
+
+      if (!follower.isActive || !following.isActive) {
+        throw AppException.badRequest(
+          'bad_request',
+          'Kullanıcı hesabı aktif değil',
+        );
+      }
+
+      if (followerId === followingId) {
+        throw AppException.badRequest(
+          'bad_request',
+          'Kendinizi takip edemezsiniz',
+        );
+      }
+
+      // Mevcut takip ilişkisi kontrolü (transaction dışında)
+      const existingFollow = await this.prisma.follow.findUnique({
+        where: {
+          followerId_followingId: {
+            followerId,
+            followingId,
+          },
+        },
+      });
+
+      if (existingFollow) {
+        throw AppException.conflict(
+          'conflict',
+          'Bu kullanıcıyı zaten takip ediyorsunuz',
+        );
+      }
+
+      // Takip işlemi ve stat güncellemelerini transaction içinde yap
+      return await this.transactionHelper.runInTransaction(async (tx) => {
+        const follow = await tx.follow.create({
+          data: {
+            followerId,
+            followingId,
+          },
+          include: {
+            following: {
+              select: {
+                id: true,
+                displayName: true,
+                profileImageUrl: true,
+              },
+            },
+          },
+        });
+
+        // Takipçi/takip edilen sayılarını güncelle
+        await Promise.all([
+          tx.userStats.update({
+            where: { userId: followerId },
+            data: { followingCount: { increment: 1 } },
+          }),
+          tx.userStats.update({
+            where: { userId: followingId },
+            data: { followersCount: { increment: 1 } },
+          }),
+        ]);
+
+        this.logger.log(`User ${followerId} followed user ${followingId}`);
+        return follow;
+      }, 'Takip işlemi gerçekleştirilemedi');
+    } catch (error) {
+      this.logger.error(`Takip işlemi hatası: ${error.message}`, error.stack);
+
+      if (error instanceof AppException) {
+        throw error;
+      }
+
+      throw AppException.internal('Takip işlemi gerçekleştirilemedi');
+    }
+  }
+
+  /**
+   * Send a match request with proper validation and type safety
    */
   async sendMatchRequest(
     senderId: string,
@@ -95,120 +376,175 @@ export class MatchRequestService {
     const { receiverId, message } = requestDto;
 
     try {
-      // Check if users exist
+      // Kullanıcı varlığı kontrolü (transaction dışında)
       const [sender, receiver] = await Promise.all([
-        this.prisma.user.findUnique({ where: { id: senderId } }),
-        this.prisma.user.findUnique({ where: { id: receiverId } }),
+        this.prisma.user.findUnique({
+          where: { id: senderId },
+          select: { id: true, isActive: true, displayName: true },
+        }),
+        this.prisma.user.findUnique({
+          where: { id: receiverId },
+          select: { id: true, isActive: true, displayName: true },
+        }),
       ]);
 
       if (!sender || !receiver) {
-        throw new NotFoundException({
-          error: 'user_not_found',
-          message: 'One or both users not found',
-        });
+        throw AppException.notFound('user_not_found', 'Kullanıcı bulunamadı');
       }
 
-      // Check if sending to self
+      if (!sender.isActive || !receiver.isActive) {
+        throw AppException.badRequest(
+          'bad_request',
+          'Kullanıcı hesabı aktif değil',
+        );
+      }
+
       if (senderId === receiverId) {
-        throw new BadRequestException({
-          error: 'invalid_request',
-          message: 'Cannot send a match request to yourself',
-        });
+        throw AppException.badRequest(
+          'bad_request',
+          'Kendinize eşleşme isteği gönderemezsiniz',
+        );
       }
 
-      // Check if match already exists
-      const existingMatch = await this.prisma.match.findFirst({
-        where: {
-          OR: [
-            { initiatorId: senderId, receiverId },
-            { initiatorId: receiverId, receiverId: senderId },
-          ],
-        },
-      });
+      // Mevcut ilişkileri kontrol et (transaction dışında)
+      const [existingMatch, existingRequest, pendingRequest] =
+        await Promise.all([
+          this.prisma.match.findFirst({
+            where: {
+              OR: [
+                { initiatorId: senderId, receiverId },
+                { initiatorId: receiverId, receiverId: senderId },
+              ],
+            },
+          }),
+          this.prisma.matchRequest.findUnique({
+            where: {
+              senderId_receiverId: { senderId, receiverId },
+            },
+          }),
+          this.prisma.matchRequest.findUnique({
+            where: {
+              senderId_receiverId: {
+                senderId: receiverId,
+                receiverId: senderId,
+              },
+            },
+          }),
+        ]);
 
       if (existingMatch) {
-        this.logger.warn(
-          `Match request blocked: Match already exists between users ${senderId} and ${receiverId}`,
+        throw AppException.conflict(
+          'match_exists',
+          'Bu kullanıcıyla zaten bir eşleşmeniz var',
         );
-        throw new ConflictException({
-          error: 'match_exists',
-          message: 'A match already exists between these users',
-        });
       }
-
-      // Check if request already exists
-      const existingRequest = await this.prisma.matchRequest.findUnique({
-        where: {
-          senderId_receiverId: {
-            senderId,
-            receiverId,
-          },
-        },
-      });
 
       if (existingRequest) {
-        this.logger.warn(
-          `Match request blocked: Request already exists from ${senderId} to ${receiverId}`,
+        throw AppException.conflict(
+          'conflict',
+          'Bu kullanıcıya zaten bir eşleşme isteği gönderdiniz',
         );
-        throw new ConflictException({
-          error: 'request_exists',
-          message: 'A match request already exists',
-        });
       }
 
-      // Check if there's a pending request from the receiver to the sender
-      const pendingRequest = await this.prisma.matchRequest.findUnique({
-        where: {
-          senderId_receiverId: {
-            senderId: receiverId,
-            receiverId: senderId,
-          },
-        },
-      });
-
-      // If there's a pending request in the opposite direction, auto-accept and create a match
+      // Karşılıklı istek varsa otomatik kabul et
       if (pendingRequest && pendingRequest.status === 'pending') {
         this.logger.log(
           `Auto-accepting mutual match request between ${senderId} and ${receiverId}`,
         );
 
-        await this.prisma.matchRequest.update({
-          where: { id: pendingRequest.id },
-          data: { status: 'accepted' },
-        });
+        return await this.transactionHelper.runInTransaction(async (tx) => {
+          // Mevcut isteği kabul et
+          await tx.matchRequest.update({
+            where: { id: pendingRequest.id },
+            data: { status: 'accepted' },
+          });
 
-        await this.createMatch(receiverId, senderId);
+          // Yeni isteği kabul edilmiş olarak oluştur
+          const newRequest = await tx.matchRequest.create({
+            data: {
+              senderId,
+              receiverId,
+              message: message || '',
+              status: 'accepted',
+            },
+            include: {
+              sender: {
+                select: {
+                  id: true,
+                  displayName: true,
+                  profileImageUrl: true,
+                },
+              },
+              receiver: {
+                select: {
+                  id: true,
+                  displayName: true,
+                  profileImageUrl: true,
+                },
+              },
+            },
+          });
 
-        // Return the request with status accepted
-        return this.prisma.matchRequest.create({
-          data: {
-            senderId,
-            receiverId,
-            message,
-            status: 'accepted',
-          },
-        });
+          // Match oluştur
+          await tx.match.create({
+            data: {
+              initiatorId: receiverId, // İlk isteği gönderen initiator
+              receiverId: senderId,
+            },
+          });
+
+          // Stats güncelle
+          await Promise.all([
+            tx.userStats.update({
+              where: { userId: senderId },
+              data: { matchesCount: { increment: 1 } },
+            }),
+            tx.userStats.update({
+              where: { userId: receiverId },
+              data: { matchesCount: { increment: 1 } },
+            }),
+          ]);
+
+          return newRequest;
+        }, 'Karşılıklı eşleşme isteği işlenemedi');
       }
 
-      // Create the match request
+      // Normal istek oluştur
       const newRequest = await this.prisma.matchRequest.create({
         data: {
           senderId,
           receiverId,
-          message,
+          message: message || '',
+        },
+        include: {
+          sender: {
+            select: {
+              id: true,
+              displayName: true,
+              profileImageUrl: true,
+            },
+          },
+          receiver: {
+            select: {
+              id: true,
+              displayName: true,
+              profileImageUrl: true,
+            },
+          },
         },
       });
 
       this.logger.log(
         `Match request created: ${newRequest.id} from ${senderId} to ${receiverId}`,
       );
+
       return newRequest;
     } catch (error) {
-      // Sadece beklenmedik hatalar için ERROR seviyesinde log at
       if (
         !(error instanceof ConflictException) &&
         !(error instanceof BadRequestException) &&
-        !(error instanceof NotFoundException)
+        !(error instanceof NotFoundException) &&
+        !(error instanceof AppException)
       ) {
         this.logger.error(
           `Unexpected error sending match request: ${error.message}`,
@@ -220,7 +556,87 @@ export class MatchRequestService {
   }
 
   /**
-   * Get match requests for a user
+   * Reject a match request with proper type safety
+   */
+  async rejectMatchRequest(
+    requestId: string,
+    receiverId: string,
+  ): Promise<MatchRequest> {
+    try {
+      // Request kontrolü (transaction dışında)
+      const request = await this.prisma.matchRequest.findUnique({
+        where: { id: requestId },
+        include: {
+          sender: {
+            select: { id: true, displayName: true },
+          },
+        },
+      });
+
+      if (!request) {
+        throw AppException.notFound('not_found', 'Eşleşme isteği bulunamadı');
+      }
+
+      if (request.receiverId !== receiverId) {
+        throw AppException.badRequest(
+          'bad_request',
+          'Bu isteğin alıcısı siz değilsiniz',
+        );
+      }
+
+      if (request.status !== 'pending') {
+        throw AppException.badRequest(
+          'bad_request',
+          `İstek zaten ${request.status} durumunda`,
+        );
+      }
+
+      // İsteği reddet
+      const rejectedRequest = await this.prisma.matchRequest.update({
+        where: { id: requestId },
+        data: {
+          status: 'rejected',
+          updatedAt: new Date(),
+        },
+        include: {
+          sender: {
+            select: {
+              id: true,
+              displayName: true,
+              profileImageUrl: true,
+            },
+          },
+          receiver: {
+            select: {
+              id: true,
+              displayName: true,
+              profileImageUrl: true,
+            },
+          },
+        },
+      });
+
+      this.logger.log(
+        `Match request ${requestId} rejected by user ${receiverId}`,
+      );
+
+      return rejectedRequest;
+    } catch (error) {
+      this.logger.error(
+        `Eşleşme isteği reddetme hatası: ${error.message}`,
+        error.stack,
+      );
+
+      if (error instanceof AppException) {
+        throw error;
+      }
+
+      throw AppException.internal('Eşleşme isteği reddedilemedi');
+    }
+  }
+
+  /**
+   * Get match requests for a user with proper filtering and type safety
    */
   async getMatchRequests(
     userId: string,
@@ -229,358 +645,72 @@ export class MatchRequestService {
     offset = 0,
   ): Promise<{ items: MatchRequest[]; total: number }> {
     try {
-      const total = await this.prisma.matchRequest.count({
-        where: {
-          receiverId: userId,
-          status,
-        },
-      });
+      // Input validation
+      const validStatuses = ['pending', 'accepted', 'rejected'];
+      if (!validStatuses.includes(status)) {
+        throw AppException.badRequest('bad_request', 'Geçersiz durum değeri');
+      }
 
-      const requests = await this.prisma.matchRequest.findMany({
-        where: {
-          receiverId: userId,
-          status,
-        },
-        include: {
-          sender: {
-            include: {
-              languages: {
-                where: { isNative: true },
-                include: {
-                  language: true,
+      const safeLimit = Math.min(Math.max(1, limit), 100);
+      const safeOffset = Math.max(0, offset);
+
+      const where = {
+        receiverId: userId,
+        status,
+      };
+
+      const [total, requests] = await Promise.all([
+        this.prisma.matchRequest.count({ where }),
+        this.prisma.matchRequest.findMany({
+          where,
+          include: {
+            sender: {
+              select: {
+                id: true,
+                displayName: true,
+                firstName: true,
+                lastName: true,
+                profileImageUrl: true,
+                bio: true,
+                countryCode: true,
+              },
+              include: {
+                languages: {
+                  where: { isNative: true },
+                  include: { language: true },
+                  take: 3, // Sadece ilk 3 anadil
+                },
+                stats: {
+                  select: {
+                    matchesCount: true,
+                    lastActiveDate: true,
+                  },
                 },
               },
             },
           },
-        },
-        take: limit,
-        skip: offset,
-        orderBy: {
-          createdAt: 'desc',
-        },
-      });
+          take: safeLimit,
+          skip: safeOffset,
+          orderBy: {
+            createdAt: 'desc',
+          },
+        }),
+      ]);
 
       return {
         items: requests,
         total,
       };
     } catch (error) {
+      if (error instanceof AppException) {
+        throw error;
+      }
+
       this.logger.error(
         `Error getting match requests: ${error.message}`,
         error.stack,
       );
-      throw error;
-    }
-  }
-
-  /**
-   * Accept a match request
-   */
-  async acceptMatchRequest(
-    requestId: string,
-    receiverId: string,
-  ): Promise<Match> {
-    try {
-      const request = await this.prisma.matchRequest.findUnique({
-        where: { id: requestId },
-        include: { sender: true },
-      });
-
-      if (!request) {
-        throw new NotFoundException({
-          error: 'request_not_found',
-          message: 'Eşleşme isteği bulunamadı',
-        });
-      }
-
-      if (request.receiverId !== receiverId) {
-        throw new BadRequestException({
-          error: 'not_receiver',
-          message: 'Bu isteğin alıcısı siz değilsiniz',
-        });
-      }
-
-      if (request.status !== 'pending') {
-        throw new BadRequestException({
-          error: 'invalid_request_status',
-          message: `İstek zaten ${request.status} durumunda`,
-        });
-      }
-
-      // Transaction içinde işlemleri gerçekleştir
-      const match = await this.transactionHelper.runInTransaction(
-        async (tx) => {
-          // İstek durumunu güncelle
-          await tx.matchRequest.update({
-            where: { id: requestId },
-            data: { status: 'accepted' },
-          });
-
-          // Eşleşme oluştur
-          const match = await tx.match.create({
-            data: {
-              initiatorId: request.senderId,
-              receiverId,
-            },
-          });
-
-          // Kullanıcı istatistiklerini güncelle
-          await tx.userStats.update({
-            where: { userId: request.senderId },
-            data: { matchesCount: { increment: 1 } },
-          });
-
-          await tx.userStats.update({
-            where: { userId: receiverId },
-            data: { matchesCount: { increment: 1 } },
-          });
-
-          return match;
-        },
-        'Eşleşme isteği kabul edilemedi',
-      );
-
-      // Transaction dışında conversation oluştur
-      try {
-        // Kullanıcıların dil tercihlerini belirle
-        const [senderLanguages, receiverLanguages] = await Promise.all([
-          this.prisma.userLanguage.findMany({
-            where: { userId: request.senderId, isLearning: true },
-            include: { language: true },
-          }),
-          this.prisma.userLanguage.findMany({
-            where: { userId: receiverId, isNative: true },
-            include: { language: true },
-          }),
-        ]);
-
-        // Ortak dil bul (gönderen öğreniyor, alıcı anadil olarak biliyor)
-        let conversationLanguageId: string | undefined = undefined;
-        for (const senderLang of senderLanguages) {
-          const matchingLang = receiverLanguages.find(
-            (receiverLang) => receiverLang.languageId === senderLang.languageId,
-          );
-          if (matchingLang) {
-            conversationLanguageId = senderLang.languageId;
-            break;
-          }
-        }
-
-        // Eğer ortak dil bulunamazsa, İngilizce'yi varsayılan olarak kullan
-        if (!conversationLanguageId) {
-          const englishLanguage = await this.prisma.language.findFirst({
-            where: { code: 'en' },
-          });
-          conversationLanguageId = englishLanguage?.id;
-
-          // Eğer İngilizce de bulunamazsa, gönderenin öğrendiği ilk dili kullan
-          if (!conversationLanguageId && senderLanguages.length > 0) {
-            conversationLanguageId = senderLanguages[0].languageId;
-          }
-        }
-
-        // Conversation oluştur
-        if (conversationLanguageId) {
-          const conversation = await this.createConversationForMatch(
-            [request.senderId, receiverId],
-            conversationLanguageId,
-            match.id,
-          );
-
-          // Match'i conversation ile ilişkilendir
-          await this.prisma.match.update({
-            where: { id: match.id },
-            data: { conversationId: conversation.id },
-          });
-
-          this.logger.log(
-            `Conversation created for match ${match.id}: ${conversation.id}`,
-          );
-        }
-      } catch (conversationError) {
-        this.logger.error(
-          `Conversation oluşturulamadı: ${conversationError.message}`,
-          conversationError.stack,
-        );
-        // Conversation hata verirse match'i silme, sadece log at
-      }
-
-      return match;
-    } catch (error) {
-      this.logger.error(
-        `Eşleşme isteği kabul hatası: ${error.message}`,
-        error.stack,
-      );
-      if (error instanceof AppException) {
-        throw error;
-      }
-      throw new AppException(
-        500,
-        'internal_error',
-        'Eşleşme isteği kabul edilemedi',
-      );
-    }
-  }
-
-  /**
-   * Reject a match request
-   */
-  async rejectMatchRequest(
-    requestId: string,
-    receiverId: string,
-  ): Promise<MatchRequest> {
-    try {
-      const request = await this.prisma.matchRequest.findUnique({
-        where: { id: requestId },
-      });
-
-      if (!request) {
-        throw new NotFoundException({
-          error: 'request_not_found',
-          message: 'Eşleşme isteği bulunamadı',
-        });
-      }
-
-      if (request.receiverId !== receiverId) {
-        throw new BadRequestException({
-          error: 'not_receiver',
-          message: 'Bu isteğin alıcısı siz değilsiniz',
-        });
-      }
-
-      if (request.status !== 'pending') {
-        throw new BadRequestException({
-          error: 'invalid_request_status',
-          message: `İstek zaten ${request.status} durumunda`,
-        });
-      }
-
-      // İsteği reddet
-      return this.prisma.matchRequest.update({
-        where: { id: requestId },
-        data: { status: 'rejected' },
-      });
-    } catch (error) {
-      this.logger.error(
-        `Eşleşme isteği reddetme hatası: ${error.message}`,
-        error.stack,
-      );
-      if (error instanceof AppException) {
-        throw error;
-      }
-      throw new AppException(
-        500,
-        'internal_error',
-        'Eşleşme isteği reddedilemedi',
-      );
-    }
-  }
-
-  async followUser(followerId: string, followingId: string): Promise<Follow> {
-    try {
-      // Kullanıcılar var mı kontrol et
-      const [follower, following] = await Promise.all([
-        this.prisma.user.findUnique({ where: { id: followerId } }),
-        this.prisma.user.findUnique({ where: { id: followingId } }),
-      ]);
-
-      if (!follower || !following) {
-        throw new NotFoundException({
-          error: 'user_not_found',
-          message: 'Kullanıcı bulunamadı',
-        });
-      }
-
-      if (followerId === followingId) {
-        throw new BadRequestException({
-          error: 'invalid_follow',
-          message: 'Kendinizi takip edemezsiniz',
-        });
-      }
-
-      const existingFollow = await this.prisma.follow.findUnique({
-        where: {
-          followerId_followingId: {
-            followerId,
-            followingId,
-          },
-        },
-      });
-
-      if (existingFollow) {
-        throw new ConflictException({
-          error: 'already_following',
-          message: 'Bu kullanıcıyı zaten takip ediyorsunuz',
-        });
-      }
-
-      // Transaction ile takip işlemi ve stat güncellemelerini yap
-      return this.transactionHelper.runInTransaction(async (tx) => {
-        const follow = await tx.follow.create({
-          data: {
-            followerId,
-            followingId,
-          },
-        });
-
-        // Takipçi/takip edilen sayılarını güncelle
-        await tx.userStats.update({
-          where: { userId: followerId },
-          data: { followingCount: { increment: 1 } },
-        });
-
-        await tx.userStats.update({
-          where: { userId: followingId },
-          data: { followersCount: { increment: 1 } },
-        });
-
-        return follow;
-      }, 'Takip işlemi gerçekleştirilemedi');
-    } catch (error) {
-      this.logger.error(`Takip işlemi hatası: ${error.message}`, error.stack);
-      if (error instanceof AppException) {
-        throw error;
-      }
-      throw new AppException(
-        500,
-        'internal_error',
-        'Takip işlemi gerçekleştirilemedi',
-      );
-    }
-  }
-
-  /**
-   * Create a match between two users
-   */
-  private async createMatch(
-    initiatorId: string,
-    receiverId: string,
-  ): Promise<Match> {
-    try {
-      // Create a new match
-      const match = await this.prisma.match.create({
-        data: {
-          initiatorId,
-          receiverId,
-        },
-      });
-
-      // Update user stats
-      await this.prisma.$transaction([
-        this.prisma.userStats.update({
-          where: { userId: initiatorId },
-          data: { matchesCount: { increment: 1 } },
-        }),
-        this.prisma.userStats.update({
-          where: { userId: receiverId },
-          data: { matchesCount: { increment: 1 } },
-        }),
-      ]);
-
-      return match;
-    } catch (error) {
-      this.logger.error(`Error creating match: ${error.message}`, error.stack);
-      throw error;
+      throw AppException.internal('Eşleşme istekleri alınamadı');
     }
   }
 }

@@ -22,32 +22,7 @@ export class WsAuthGuard implements CanActivate {
       const client = context.switchToWs().getClient();
       const headers = client.handshake.headers;
 
-      // TEST MODU GÜVENLIK AÇIĞI - BU KODU ÇIKARALIM
-      /*
-      // Test modu için test kullanıcı ID'sine izin ver
-      // DEV ortamında kullanılmalı, PROD ortamında bu kod çıkarılmalı
-      const testUserId = headers['x-test-user-id'];
-      if (process.env.NODE_ENV === 'development' && testUserId) {
-        try {
-          const user = await this.prismaService.user.findUnique({
-            where: { id: testUserId },
-          });
-
-          if (!user) {
-            throw new WsException('Test user not found');
-          }
-
-          client.user = user;
-          this.logger.log(`WS test user authenticated: ${user.id}`);
-          return true;
-        } catch (error) {
-          this.logger.error(`WS test auth error: ${error.message}`);
-          throw new WsException('Invalid test user');
-        }
-      }
-      */
-
-      // Normal Firebase Authentication
+      // Firebase Authentication
       const authHeader = headers.authorization;
       if (!authHeader) {
         throw new WsException('Authorization header is missing');
@@ -64,10 +39,21 @@ export class WsAuthGuard implements CanActivate {
       // Get user from database
       const user = await this.prismaService.user.findUnique({
         where: { firebaseUid: decodedToken.uid },
+        select: {
+          id: true,
+          firebaseUid: true,
+          email: true,
+          displayName: true,
+          isActive: true,
+        },
       });
 
       if (!user) {
         throw new WsException('User not found in database');
+      }
+
+      if (!user.isActive) {
+        throw new WsException('User account is deactivated');
       }
 
       // Attach user to client
@@ -80,6 +66,7 @@ export class WsAuthGuard implements CanActivate {
         `WS Authentication error: ${error.message}`,
         error.stack,
       );
+
       throw new WsException('Authentication failed');
     }
   }
