@@ -47,7 +47,6 @@ export class WebsocketsGateway
   private readonly logger = new Logger(WebsocketsGateway.name);
   private readonly clients: Map<string, SocketClient> = new Map();
   private readonly connections: Map<string, ConnectionState> = new Map();
-  private readonly wsAuthGuard: WsAuthGuard;
 
   // Configuration
   private readonly AUTH_TIMEOUT_MS =
@@ -58,9 +57,8 @@ export class WebsocketsGateway
   constructor(
     private readonly firebaseAdmin: FirebaseAdminService,
     private readonly prisma: PrismaService,
-    wsAuthGuard: WsAuthGuard,
+    private readonly wsAuthGuard: WsAuthGuard,
   ) {
-    this.wsAuthGuard = wsAuthGuard;
     this.startHeartbeatMonitor();
   }
 

@@ -87,6 +87,6 @@ import { TransactionHelper } from './common/helpers/transaction.helper';
     TestAuthService,
     ValidationHelper,
   ],
-  exports: [TestAuthService, ValidationHelper, TransactionHelper],
+  exports: [TestAuthService, ValidationHelper, TransactionHelper], // Bu satırı ekle
 })
 export class AppModule {}

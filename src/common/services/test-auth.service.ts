@@ -1,7 +1,9 @@
-import { Injectable, Logger } from '@nestjs/common';
+// src/common/services/test-auth.service.ts
+import { Injectable, Logger, Global } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from 'prisma/prisma.service';
 
+@Global()
 @Injectable()
 export class TestAuthService {
   private readonly logger = new Logger(TestAuthService.name);
