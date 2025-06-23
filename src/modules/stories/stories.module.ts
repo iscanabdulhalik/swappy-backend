@@ -10,6 +10,6 @@ import { ValidationHelper } from '../../common/helpers/validation.helper';
   imports: [PrismaModule, AuthModule],
   providers: [StoriesService, TestAuthService, ValidationHelper],
   controllers: [StoriesController],
-  exports: [StoriesService],
+  exports: [StoriesService, TestAuthService],
 })
 export class StoriesModule {}

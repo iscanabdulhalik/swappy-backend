@@ -7,18 +7,20 @@ import { ValidationHelper } from '../../common/helpers/validation.helper';
 import { GoogleGenerativeAIService } from './services/google-generative-ai.service';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { UsersModule } from '../users/user.module';
+import { TestAuthService } from '../../common/services/test-auth.service';
 
 @Module({
   imports: [PrismaModule, AuthModule, UsersModule, ConfigModule],
   providers: [
     LearningService,
     ValidationHelper,
+    TestAuthService,
     {
       provide: 'AIService',
       useClass: GoogleGenerativeAIService,
     },
   ],
   controllers: [LearningController],
-  exports: [LearningService],
+  exports: [LearningService, TestAuthService],
 })
 export class LearningModule {}

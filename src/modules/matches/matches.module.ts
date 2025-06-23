@@ -9,6 +9,7 @@ import { MatchRecommendationService } from './services/match.recommendation.serv
 import { MatchRequestService } from './services/match-request.service';
 import { MatchManagementService } from './services/match-management.service';
 import { TransactionHelper } from '../../common/helpers/transaction.helper';
+import { TestAuthService } from '../../common/services/test-auth.service';
 
 @Module({
   imports: [PrismaModule, AuthModule, UsersModule],
@@ -19,8 +20,9 @@ import { TransactionHelper } from '../../common/helpers/transaction.helper';
     MatchRequestService,
     MatchManagementService,
     TransactionHelper,
+    TestAuthService,
   ],
   controllers: [MatchesController],
-  exports: [MatchesService],
+  exports: [MatchesService, TestAuthService],
 })
 export class MatchesModule {}

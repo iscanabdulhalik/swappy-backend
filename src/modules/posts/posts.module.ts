@@ -7,6 +7,7 @@ import { WebsocketsModule } from '../../websockets/websockets.module';
 import { TransactionHelper } from 'src/common/helpers/transaction.helper';
 import { NotificationGateway } from 'src/websockets/notification.gateway';
 import { PrismaService } from 'prisma/prisma.service';
+import { TestAuthService } from '../../common/services/test-auth.service';
 
 @Module({
   imports: [PrismaModule, AuthModule, WebsocketsModule],
@@ -15,8 +16,9 @@ import { PrismaService } from 'prisma/prisma.service';
     TransactionHelper,
     NotificationGateway,
     PrismaService,
+    TestAuthService,
   ],
   controllers: [PostsController],
-  exports: [PostsService],
+  exports: [PostsService, TestAuthService],
 })
 export class PostsModule {}

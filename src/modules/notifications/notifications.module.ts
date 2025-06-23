@@ -8,6 +8,7 @@ import { NotificationRepository } from './repositories/notification.repository';
 import { NotificationSettingsService } from './services/notification.service';
 import { ValidationHelper } from '../../common/helpers/validation.helper';
 import { NotificationPreferenceRepository } from './repositories/notification-repository';
+import { TestAuthService } from '../../common/services/test-auth.service';
 
 @Module({
   imports: [PrismaModule, AuthModule, WebsocketsModule],
@@ -17,8 +18,9 @@ import { NotificationPreferenceRepository } from './repositories/notification-re
     NotificationPreferenceRepository,
     NotificationSettingsService,
     ValidationHelper,
+    TestAuthService,
   ],
   controllers: [NotificationsController],
-  exports: [NotificationsService],
+  exports: [NotificationsService, TestAuthService],
 })
 export class NotificationsModule {}

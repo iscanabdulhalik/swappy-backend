@@ -5,6 +5,7 @@ import { CacheModule } from '@nestjs/cache-manager';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 import { ResponseFormatterInterceptor } from './common/interceptors/response-formatter.interceptor';
 import { PrismaModule } from '../prisma/prisma.module';
+import { CommonModule } from './common/common.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { UsersModule } from './modules/users/user.module';
 import { MatchesModule } from './modules/matches/matches.module';
@@ -15,14 +16,11 @@ import { StoriesModule } from './modules/stories/stories.module';
 import { LearningModule } from './modules/learning/learning.module';
 import { LocalLearningModule } from './modules/local-learning/local-learning.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
-import { TestAuthService } from './common/services/test-auth.service';
-import { ValidationHelper } from './common/helpers/validation.helper';
 import firebaseConfig from './configs/firebase.config';
 import { env } from './configs/environment';
 import databaseConfig from './configs/database.config';
 import * as redisStore from 'cache-manager-redis-store';
 import { ThrottlerModule } from '@nestjs/throttler';
-import { TransactionHelper } from './common/helpers/transaction.helper';
 
 @Module({
   imports: [
@@ -35,7 +33,7 @@ import { TransactionHelper } from './common/helpers/transaction.helper';
     ThrottlerModule.forRoot([
       {
         ttl: 60,
-        limit: env.NODE_ENV === 'production' ? 50 : 1000, // Prod: 50, Dev: 1000 req/min
+        limit: env.NODE_ENV === 'production' ? 50 : 1000,
       },
     ]),
 
@@ -48,7 +46,6 @@ import { TransactionHelper } from './common/helpers/transaction.helper';
           max: env.CACHE_MAX_ITEMS,
         };
 
-        // Redis URL varsa, Redis store kullan
         if (env.REDIS_URL) {
           return {
             ...config,
@@ -57,11 +54,11 @@ import { TransactionHelper } from './common/helpers/transaction.helper';
           };
         }
 
-        // Yoksa in-memory cache kullan
         return config;
       },
     }),
 
+    CommonModule,
     PrismaModule,
     AuthModule,
     UsersModule,
@@ -75,7 +72,6 @@ import { TransactionHelper } from './common/helpers/transaction.helper';
     NotificationsModule,
   ],
   providers: [
-    TransactionHelper,
     {
       provide: APP_FILTER,
       useClass: HttpExceptionFilter,
@@ -84,9 +80,6 @@ import { TransactionHelper } from './common/helpers/transaction.helper';
       provide: APP_INTERCEPTOR,
       useClass: ResponseFormatterInterceptor,
     },
-    TestAuthService,
-    ValidationHelper,
   ],
-  exports: [TestAuthService, ValidationHelper, TransactionHelper], // Bu satırı ekle
 })
 export class AppModule {}

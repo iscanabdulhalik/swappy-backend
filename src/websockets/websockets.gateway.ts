@@ -65,11 +65,23 @@ export class WebsocketsGateway
   afterInit(server: Server) {
     this.logger.log('WebSocket Gateway initialized');
 
-    // Configure Socket.IO server settings
-    server.engine.generateId = () => {
-      // Generate more unique IDs
-      return `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-    };
+    // Configure Socket.IO server settings with proper null checks
+    try {
+      if (server && server.engine) {
+        server.engine.generateId = () => {
+          // Generate more unique IDs
+          return `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+        };
+        this.logger.log('Custom Socket.IO ID generator configured');
+      } else {
+        this.logger.warn(
+          'Socket.IO engine not available, using default ID generator',
+        );
+      }
+    } catch (error) {
+      this.logger.error(`Error configuring Socket.IO engine: ${error.message}`);
+      // Continue without custom ID generator
+    }
   }
 
   async handleConnection(client: Socket) {
@@ -624,8 +636,8 @@ export class WebsocketsGateway
           connections: stats,
           authentication: authStats,
           server: {
-            engine: this.server.engine.clientsCount,
-            sockets: this.server.sockets.sockets.size,
+            engine: this.server?.engine?.clientsCount || 0,
+            sockets: this.server?.sockets?.sockets?.size || 0,
           },
         },
       };
@@ -645,21 +657,26 @@ export class WebsocketsGateway
     this.logger.log('Starting graceful WebSocket shutdown...');
 
     // Notify all clients about shutdown
-    this.server.emit('server_shutdown', {
-      message: 'Server is shutting down',
-      timestamp: new Date().toISOString(),
-    });
+    if (this.server) {
+      this.server.emit('server_shutdown', {
+        message: 'Server is shutting down',
+        timestamp: new Date().toISOString(),
+      });
 
-    // Wait a bit for messages to be delivered
-    await new Promise((resolve) => setTimeout(resolve, 1000));
+      // Wait a bit for messages to be delivered
+      await new Promise((resolve) => setTimeout(resolve, 1000));
 
-    // Close all connections
-    for (const [connectionId, connectionState] of this.connections.entries()) {
-      this.safeDisconnectClient(connectionState.socket, 'server_shutdown');
+      // Close all connections
+      for (const [
+        connectionId,
+        connectionState,
+      ] of this.connections.entries()) {
+        this.safeDisconnectClient(connectionState.socket, 'server_shutdown');
+      }
+
+      // Close the server
+      this.server.close();
     }
-
-    // Close the server
-    this.server.close();
 
     this.logger.log('WebSocket gateway shutdown complete');
   }
